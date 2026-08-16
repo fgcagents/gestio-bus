@@ -7,6 +7,7 @@ import easyocr
 from PIL import Image
 import io
 import re
+from ocr_utils import prepare_image_for_ocr
 
 # Page config
 st.set_page_config(page_title="Gestió de Flota i Accessos - Tall per Obres", layout="wide", page_icon="🚌")
@@ -158,18 +159,22 @@ if page == "📷 Control d'Accessos (Càmera / Manual)":
 
         matricula_detectada = ""
         if uploaded_photo is not None:
-            image = Image.open(uploaded_photo)
-            with st.spinner("Processant la imatge amb OCR i filtrat de matrícula..."):
-                img_bytes = io.BytesIO()
-                image.save(img_bytes, format='JPEG')
-                results = reader.readtext(img_bytes.getvalue(), detail=0)
-                if results:
-                    raw_candidate = "".join(results)
-                    candidate = netejar_i_filtrar_matricula(raw_candidate)
-                    st.success(f"Matrícula detectada i filtrada: **{candidate}**")
-                    matricula_detectada = candidate
-                else:
-                    st.warning("No s'ha detectat cap text clar. Utilitza l'entrada manual a sota.")
+            try:
+                image = Image.open(uploaded_photo)
+                image = image.convert("RGB")
+                image_array = prepare_image_for_ocr(image)
+
+                with st.spinner("Processant la imatge amb OCR i filtrat de matrícula..."):
+                    results = reader.readtext(image_array, detail=0)
+                    if results:
+                        raw_candidate = "".join(results)
+                        candidate = netejar_i_filtrar_matricula(raw_candidate)
+                        st.success(f"Matrícula detectada i filtrada: **{candidate}**")
+                        matricula_detectada = candidate
+                    else:
+                        st.warning("No s'ha detectat cap text clar. Utilitza l'entrada manual a sota.")
+            except Exception as e:
+                st.error(f"No s'ha pogut processar la imatge per OCR: {e}")
 
 
     with col2:
