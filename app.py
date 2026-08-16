@@ -146,17 +146,17 @@ st.markdown("""
     <style>
     /* Incrementa l'espai entre opcions del radio a la sidebar */
     div[data-testid="stSidebar"] div[role="radiogroup"] > label {
-        padding-top: 10px !important;
-        padding-bottom: 10px !important;
+        padding-top: 20px !important;
+        padding-bottom: 20px !important;
         margin-bottom: 4px !important;
     }
     </style>
 """, unsafe_allow_html=True)
 
 page = st.sidebar.radio("Navegació", [
-    "📷 Aribades / Sortides",
+    "📷 Arribada / Sortida",
     "📊 Registre Arribades / Sortides",
-    "🚌 Alta i Gestió de Flota",
+    "🚌 Alta Autocars",
     "✏️ Edició i Manteniment de Taules",
     "📥 Exportació de Dades (Excel)"
 ])
@@ -164,8 +164,8 @@ page = st.sidebar.radio("Navegació", [
 # -----------------------------------------------------------------------------
 # 1. CONTROL D'ACCESSOS (Càmera / Manual amb Filtre REGEX)
 # -----------------------------------------------------------------------------
-if page == "📷 Control Arribada/Sortida":
-    st.header("📷 Control d'Accessos de Vehicles")
+if page == "📷 Arribada / Sortida":
+    st.header("📷 Control Arribades i Sortides")
     st.caption("Captura la matrícula mitjançant la càmera o escriu-la manualment per registrar l'entrada o sortida.")
 
     # CSS corregit: eliminem el max-width fix i forcem el 100% real de l'amplada
@@ -324,8 +324,8 @@ if page == "📷 Control Arribada/Sortida":
 # 2. REGISTRE D'ENTRADES I SORTIDES
 # -----------------------------------------------------------------------------
 elif page == "📊 Registre Arribades / Sortides":
-    st.header("📊 Registre General Arribades i Sortides")
-    st.caption("Aquesta taula mostra els moviments combinats amb les característiques del vehicle.")
+    st.header("📊 Registre Arribades i Sortides")
+    # st.caption("Aquesta taula mostra els moviments combinats amb les característiques del vehicle.")
 
     conn = get_db_connection()
     query = """
@@ -361,20 +361,20 @@ elif page == "📊 Registre Arribades / Sortides":
 # -----------------------------------------------------------------------------
 # 3. ALTA I GESTIÓ DE FLOTA (AUTOCARS)
 # -----------------------------------------------------------------------------
-elif page == "🚌 Alta i Gestió de Flota":
-    st.header("🚌 Alta i Gestió de la Flota")
+elif page == "🚌 Alta Autocars":
+    st.header("🚌 Alta Autocars")
     st.caption("Afegeix nous autocars a la base de dades amb totes les seves especificacions tècniques.")
 
     col_form, col_table = st.columns([1, 1.5])
 
     with col_form:
-        st.subheader("Formulari d'Alta de Nou Autocar")
+        st.subheader("Alta Nou Autocar")
         with st.form("form_alta_autocar", clear_on_submit=True):
             mat = st.text_input("Matrícula *", placeholder="Ex: 5678JKL").strip().upper()
             cap = st.number_input("Capacitat (places) *", min_value=1, max_value=120, value=55)
             pmr = st.selectbox("Accés PMR (Mobilitat Reduïda)", ["Sí", "No"])
             ac = st.selectbox("Aire Acondicionat", ["Sí", "No"])
-            conductor = st.text_input("Nom i Cognoms del Conductor", placeholder="Ex: Joan Garcia")
+            conductor = st.selctbox("Sexe", ["H", "D"] )
             
             submitted = st.form_submit_button("➕ Guardar Autocar")
             
@@ -389,7 +389,7 @@ elif page == "🚌 Alta i Gestió de Flota":
                         st.error(f"La matrícula **{mat}** ja està registrada a la base de dades.")
 
     with col_table:
-        st.subheader("Flota d'Autocars Catalogats")
+        st.subheader("Autocars registrats ")
         conn = get_db_connection()
         df_autocars = read_dataframe(
             'SELECT matricula AS "Matrícula", capacitat AS "Capacitat", '
@@ -405,10 +405,10 @@ elif page == "🚌 Alta i Gestió de Flota":
 # 4. EDICIÓ I MANTENIMENT DE TAULES
 # -----------------------------------------------------------------------------
 elif page == "✏️ Edició i Manteniment de Taules":
-    st.header("✏️ Edició Directa de les Taules de Dades")
+    st.header("✏️ Edició de Taules de Dades")
     st.caption("Modifica directament qualsevol dada de la taula d'autocars o ajusta registres d'arribada/sortida.")
 
-    tab1, tab2 = st.tabs(["Edició Flota (Autocars)", "Edició Registres d'Accés"])
+    tab1, tab2 = st.tabs(["Edició Flota", "Edició Arribades/Sortids"])
 
     with tab1:
         st.subheader("Edició de la Taula d'Autocars")
@@ -474,7 +474,7 @@ elif page == "✏️ Edició i Manteniment de Taules":
                 "matricula": st.column_config.TextColumn("Matrícula", required=True),
                 "hora_entrada": st.column_config.TextColumn("Hora Entrada"),
                 "hora_sortida": st.column_config.TextColumn("Hora Sortida"),
-                "estat": st.column_config.SelectboxColumn("Estat", options=["DINS", "FORA"])
+                "estat": st.column_config.SelectboxColumn("Estat", options=["Esperant", "En trajecte"])
             },
             width="stretch"
         )
@@ -516,7 +516,7 @@ elif page == "✏️ Edició i Manteniment de Taules":
 # 5. EXPORTACIÓ A EXCEL
 # -----------------------------------------------------------------------------
 elif page == "📥 Exportació de Dades (Excel)":
-    st.header("📥 Exportació de la Informació a Excel")
+    # st.header("📥 Exportació de la Informació a Excel")
     st.caption("Descarrega tot l'historial de moviments o el llistat de la flota en un fitxer Excel formatat.")
 
     conn = get_db_connection()
