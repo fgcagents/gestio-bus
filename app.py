@@ -374,7 +374,7 @@ elif page == "🚌 Alta Autocars":
             cap = st.number_input("Capacitat (places) *", min_value=1, max_value=120, value=55)
             pmr = st.selectbox("Accés PMR (Mobilitat Reduïda)", ["Sí", "No"])
             ac = st.selectbox("Aire Acondicionat", ["Sí", "No"])
-            conductor = st.selctbox("Sexe", ["H", "D"] )
+            conductor = st.selctbox("Conductor", ["H", "D"] )
             
             submitted = st.form_submit_button("➕ Guardar Autocar")
             
