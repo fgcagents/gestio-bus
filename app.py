@@ -140,6 +140,19 @@ st.sidebar.markdown("**Control d'Accessos - Tall per Obres**")
 db_label, db_is_persistent = database_status()
 db_icon = "🟢" if db_is_persistent else "🟡"
 st.sidebar.caption(f"{db_icon} Base de dades: {db_label}")
+
+# Injectar CSS per millorar l'espaiat entre opcions del radio button
+st.markdown("""
+    <style>
+    /* Incrementa l'espai entre opcions del radio a la sidebar */
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label {
+        padding-top: 10px !important;
+        padding-bottom: 10px !important;
+        margin-bottom: 4px !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 page = st.sidebar.radio("Navegació", [
     "📷 Control d'Accessos (Càmera / Manual)",
     "📊 Registre d'Entrades i Sortides",
