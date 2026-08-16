@@ -89,7 +89,7 @@ page = st.sidebar.radio("Navegació", [
 ])
 
 # -----------------------------------------------------------------------------
-# 1. CONTROL D'ACCESSOS (Càmera amb Zoom / Manual + Lògica Entrada/Sortida)
+# 1. CONTROL D'ACCESSOS (Càmera HTML5 amb Zoom / Manual)
 # -----------------------------------------------------------------------------
 if page == "📷 Control d'Accessos (Càmera / Manual)":
     st.header("📷 Control d'Accessos de Vehicles")
@@ -100,66 +100,65 @@ if page == "📷 Control d'Accessos (Càmera / Manual)":
     with col1:
         st.subheader("1. Captura amb Càmera i Zoom")
         
-        # Component per defecte per capturar la foto
-        camera_photo = st.camera_input("Fes una foto a la matrícula de l'autobús")
-        
-        # Component opcional amb JS per a control avançat de zoom si el dispositiu ho admet
-        with st.expander("🔍 Opcions d'Ajust de Zoom / Càmera Posterior"):
-            camera_html = """
-            <div style="text-align: center; font-family: sans-serif;">
-                <video id="video" autoplay playsinline style="width: 100%; max-width: 380px; border: 2px solid #ccc; border-radius: 8px;"></video>
-                <br><br>
-                <label for="zoomRange"><b>Nivell de Zoom:</b> </label>
-                <input type="range" id="zoomRange" min="1" max="5" step="0.1" value="2" style="width: 50%;">
-                <span id="zoomValue">2.0x</span>
-            </div>
+        # Component únic de Càmera HTML5/JS amb Zoom
+        camera_html = """
+        <div style="text-align: center; font-family: sans-serif;">
+            <video id="video" autoplay playsinline style="width: 100%; max-width: 380px; border: 2px solid #ccc; border-radius: 8px;"></video>
+            <br><br>
+            <label for="zoomRange"><b>Nivell de Zoom:</b> </label>
+            <input type="range" id="zoomRange" min="1" max="5" step="0.1" value="2" style="width: 50%;">
+            <span id="zoomValue">2.0x</span>
+        </div>
 
-            <script>
-            const video = document.getElementById('video');
-            const zoomRange = document.getElementById('zoomRange');
-            const zoomValue = document.getElementById('zoomValue');
-            let imageTrack = null;
+        <script>
+        const video = document.getElementById('video');
+        const zoomRange = document.getElementById('zoomRange');
+        const zoomValue = document.getElementById('zoomValue');
+        let imageTrack = null;
 
-            navigator.mediaDevices.getUserMedia({
-                video: {
-                    facingMode: { ideal: "environment" },
-                    zoom: true
-                }
-            }).then(stream => {
-                video.srcObject = stream;
-                imageTrack = stream.getVideoTracks()[0];
-                const capabilities = imageTrack.getCapabilities();
-                if (capabilities.zoom) {
-                    zoomRange.min = capabilities.zoom.min;
-                    zoomRange.max = capabilities.zoom.max;
-                    zoomRange.step = capabilities.zoom.step;
-                    zoomRange.value = Math.min(2.0, capabilities.zoom.max);
-                    applyZoom(zoomRange.value);
-                } else {
-                    zoomRange.disabled = true;
-                    zoomValue.innerText = "Zoom no suportat per la lent";
-                }
-            }).catch(err => {
-                navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
-                    video.srcObject = stream;
-                });
-            });
-
-            zoomRange.oninput = (e) => { applyZoom(e.target.value); };
-
-            function applyZoom(val) {
-                zoomValue.innerText = parseFloat(val).toFixed(1) + 'x';
-                if (imageTrack && imageTrack.applyConstraints) {
-                    imageTrack.applyConstraints({ advanced: [{ zoom: val }] });
-                }
+        navigator.mediaDevices.getUserMedia({
+            video: {
+                facingMode: { ideal: "environment" },
+                zoom: true
             }
-            </script>
-            """
-            html_components.html(camera_html, height=280)
+        }).then(stream => {
+            video.srcObject = stream;
+            imageTrack = stream.getVideoTracks()[0];
+            const capabilities = imageTrack.getCapabilities();
+            if (capabilities.zoom) {
+                zoomRange.min = capabilities.zoom.min;
+                zoomRange.max = capabilities.zoom.max;
+                zoomRange.step = capabilities.zoom.step;
+                zoomRange.value = Math.min(2.0, capabilities.zoom.max);
+                applyZoom(zoomRange.value);
+            } else {
+                zoomRange.disabled = true;
+                zoomValue.innerText = "Zoom no suportat per la lent";
+            }
+        }).catch(err => {
+            navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
+                video.srcObject = stream;
+            });
+        });
+
+        zoomRange.oninput = (e) => { applyZoom(e.target.value); };
+
+        function applyZoom(val) {
+            zoomValue.innerText = parseFloat(val).toFixed(1) + 'x';
+            if (imageTrack && imageTrack.applyConstraints) {
+                imageTrack.applyConstraints({ advanced: [{ zoom: val }] });
+            }
+        }
+        </script>
+        """
+        html_components.html(camera_html, height=280)
+
+        # Captura directa per pujar la foto o utilitzar l'entrada manual
+        uploaded_photo = st.file_uploader("O selecciona una imatge capturada:", type=["jpg", "jpeg", "png"])
 
         matricula_detectada = ""
-        if camera_photo is not None:
-            image = Image.open(camera_photo)
+        if uploaded_photo is not None:
+            image = Image.open(uploaded_photo)
             with st.spinner("Processant la imatge amb OCR i filtrat de matrícula..."):
                 img_bytes = io.BytesIO()
                 image.save(img_bytes, format='JPEG')
@@ -171,6 +170,7 @@ if page == "📷 Control d'Accessos (Càmera / Manual)":
                     matricula_detectada = candidate
                 else:
                     st.warning("No s'ha detectat cap text clar. Utilitza l'entrada manual a sota.")
+
 
     with col2:
         st.subheader("2. Confirmació / Entrada Manual")
