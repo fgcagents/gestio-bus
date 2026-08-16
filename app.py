@@ -136,7 +136,7 @@ reader = load_ocr()
 
 # Sidebar Navigation
 st.sidebar.title("🚌 Gestió d'Autobusos")
-st.sidebar.markdown("**Control d'Accessos - Tall per Obres**")
+# st.sidebar.markdown("**Control d'Accessos - Tall per Obres**")
 db_label, db_is_persistent = database_status()
 db_icon = "🟢" if db_is_persistent else "🟡"
 st.sidebar.caption(f"{db_icon} Base de dades: {db_label}")
@@ -154,9 +154,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 page = st.sidebar.radio("Navegació", [
-    "📷 Control d'Accessos (Càmera / Manual)",
-    "📊 Registre d'Entrades i Sortides",
-    "🚌 Alta i Gestió de Flota (Autocars)",
+    "📷 Aribades / Sortides",
+    "📊 Registre Arribades / Sortides",
+    "🚌 Alta i Gestió de Flota",
     "✏️ Edició i Manteniment de Taules",
     "📥 Exportació de Dades (Excel)"
 ])
@@ -164,7 +164,7 @@ page = st.sidebar.radio("Navegació", [
 # -----------------------------------------------------------------------------
 # 1. CONTROL D'ACCESSOS (Càmera / Manual amb Filtre REGEX)
 # -----------------------------------------------------------------------------
-if page == "📷 Control d'Accessos (Càmera / Manual)":
+if page == "📷 Control Arribada/Sortida":
     st.header("📷 Control d'Accessos de Vehicles")
     st.caption("Captura la matrícula mitjançant la càmera o escriu-la manualment per registrar l'entrada o sortida.")
 
@@ -323,8 +323,8 @@ if page == "📷 Control d'Accessos (Càmera / Manual)":
 # -----------------------------------------------------------------------------
 # 2. REGISTRE D'ENTRADES I SORTIDES
 # -----------------------------------------------------------------------------
-elif page == "📊 Registre d'Entrades i Sortides":
-    st.header("📊 Registre General d'Entrades i Sortides")
+elif page == "📊 Registre Arribades / Sortides":
+    st.header("📊 Registre General Arribades i Sortides")
     st.caption("Aquesta taula mostra els moviments combinats amb les característiques del vehicle.")
 
     conn = get_db_connection()
@@ -361,8 +361,8 @@ elif page == "📊 Registre d'Entrades i Sortides":
 # -----------------------------------------------------------------------------
 # 3. ALTA I GESTIÓ DE FLOTA (AUTOCARS)
 # -----------------------------------------------------------------------------
-elif page == "🚌 Alta i Gestió de Flota (Autocars)":
-    st.header("🚌 Alta i Gestió de la Flota d'Autocars")
+elif page == "🚌 Alta i Gestió de Flota":
+    st.header("🚌 Alta i Gestió de la Flota")
     st.caption("Afegeix nous autocars a la base de dades amb totes les seves especificacions tècniques.")
 
     col_form, col_table = st.columns([1, 1.5])
