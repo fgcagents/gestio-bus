@@ -431,3 +431,4 @@ elif page == "📥 Exportació de Dades (Excel)":
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary"
     )
+
