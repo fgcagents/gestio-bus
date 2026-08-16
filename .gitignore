@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+
+# Credencials locals: mai s'han de publicar al repositori.
+.streamlit/secrets.toml
+
+# La base local pot contenir matrícules i dades personals.
+gestio_autobusos.db
+gestio_autobusos.db-shm
+gestio_autobusos.db-wal

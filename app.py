@@ -1,52 +1,132 @@
 import streamlit as st
-import streamlit.components.v1 as html_components
 import pandas as pd
-import sqlite3
 from datetime import datetime
 import easyocr
-from PIL import Image
-import io
 import re
-from ocr_utils import prepare_image_for_ocr
+
+from database import (
+    DATABASE_INTEGRITY_ERRORS,
+    database_status,
+    get_db_connection,
+    init_db,
+    read_dataframe,
+    sync_registres_sequence,
+)
 
 # Page config
 st.set_page_config(page_title="Gestió de Flota i Accessos - Tall per Obres", layout="wide", page_icon="🚌")
 
-# Initialize SQLite database
-DB_FILE = "gestio_autobusos.db"
+def netejar_i_filtrar_matricula(text_raw):
+    """Extreu i normalitza exclusivament una matrícula del format 1234BCD."""
+    # Convertim a majúscules i eliminem espais i caràcters especials.
+    text_net = re.sub(r'[^A-Z0-9]', '', text_raw.upper())
 
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    # Table for Autocars (Master Data)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS autocars (
-            matricula TEXT PRIMARY KEY,
-            capacitat INTEGER,
-            acces_pmr TEXT,
-            aire_acondicionat TEXT,
-            conductor TEXT
+    # Format actual: 4 xifres i 3 consonants vàlides, sense vocals, Ñ ni Q.
+    patro_matricula = r'\d{4}[B-DF-HJ-NPR-TV-Z]{3}'
+    match_actual = re.search(patro_matricula, text_net)
+    if match_actual:
+        return match_actual.group(0)
+
+    # EasyOCR pot confondre caràcters visualment semblants. Corregim cada
+    # caràcter només segons la seva posició esperada dins de la matrícula.
+    lletres_a_digits = str.maketrans({
+        'O': '0', 'Q': '0', 'D': '0',
+        'I': '1', 'L': '1', 'T': '1',
+        'Z': '2', 'A': '4', 'S': '5',
+        'G': '6', 'B': '8',
+    })
+    digits_a_lletres = str.maketrans({
+        '0': 'D', '1': 'L', '2': 'Z', '5': 'S',
+        '6': 'G', '7': 'T', '8': 'B', '9': 'G',
+    })
+
+    for inici in range(max(0, len(text_net) - 6)):
+        bloc = text_net[inici:inici + 7]
+        part_numerica = bloc[:4]
+        part_lletres = bloc[4:]
+
+        # Evita convertir paraules arbitràries en falses matrícules.
+        if (
+            sum(caracter.isdigit() for caracter in part_numerica) < 2
+            or sum(caracter.isalpha() for caracter in part_lletres) < 2
+        ):
+            continue
+
+        candidat = (
+            part_numerica.translate(lletres_a_digits)
+            + part_lletres.translate(digits_a_lletres)
         )
-    """)
-    # Table for Access Logs (Movements)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS registres (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            matricula TEXT NOT NULL,
-            hora_entrada TEXT NOT NULL,
-            hora_sortida TEXT,
-            estat TEXT NOT NULL,
-            FOREIGN KEY (matricula) REFERENCES autocars (matricula)
+        if re.fullmatch(patro_matricula, candidat):
+            return candidat
+
+    return ""
+
+
+def afegir_autocar_a_flota(matricula, capacitat, acces_pmr, aire_acondicionat, conductor):
+    """Afegeix un autocar a la flota dins d'una transacció segura."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO autocars (
+                matricula, capacitat, acces_pmr, aire_acondicionat, conductor
+            ) VALUES (?, ?, ?, ?, ?)
+        """, (
+            matricula,
+            capacitat,
+            acces_pmr,
+            aire_acondicionat,
+            conductor,
+        ))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def completar_alta_rapida():
+    """Desa l'autocar pendent utilitzant els valors del formulari ràpid."""
+    matricula = st.session_state.get("matricula_pendent_alta")
+    if not matricula:
+        return
+
+    try:
+        afegir_autocar_a_flota(
+            matricula,
+            st.session_state[f"capacitat_rapida_{matricula}"],
+            st.session_state[f"pmr_rapid_{matricula}"],
+            st.session_state[f"ac_rapid_{matricula}"],
+            st.session_state[f"conductor_rapid_{matricula}"].strip(),
         )
-    """)
-    conn.commit()
-    conn.close()
+        st.session_state["missatge_alta_rapida"] = (
+            f"L'autocar {matricula} s'ha afegit correctament a la flota."
+        )
+    except DATABASE_INTEGRITY_ERRORS:
+        st.session_state["missatge_alta_rapida"] = (
+            f"La matrícula {matricula} ja constava a la flota."
+        )
+    finally:
+        st.session_state["matricula_pendent_alta"] = None
 
-init_db()
 
-# DB Helper functions
-def get_db_connection():
-    return sqlite3.connect(DB_FILE)
+def descartar_alta_rapida():
+    """Tanca el formulari sense afegir l'autocar a la flota."""
+    st.session_state["matricula_pendent_alta"] = None
+
+
+try:
+    init_db()
+except Exception:
+    st.error(
+        "No s'ha pogut connectar amb la base de dades. "
+        "Revisa el secret DATABASE_URL de Streamlit Cloud."
+    )
+    st.stop()
+
+st.session_state.setdefault("matricula_pendent_alta", None)
+st.session_state.setdefault("missatge_alta_rapida", None)
 
 @st.cache_resource
 def load_ocr():
@@ -54,33 +134,12 @@ def load_ocr():
 
 reader = load_ocr()
 
-# Helper function: Regex processing for Spanish license plates
-def netejar_i_filtrar_matricula(text_raw):
-    # 1. Convert to uppercase and strip non-alphanumeric characters
-    text_net = re.sub(r'[^A-Z0-9]', '', text_raw.upper())
-    
-    # 2. Match standard Spanish plate: 4 digits + 3 consonants (ignoring vowels and 'E' country indicator)
-    match_actual = re.search(r'\d{4}[B-DF-HJ-NP-TV-Z]{3}', text_net)
-    if match_actual:
-        return match_actual.group(0)
-    
-    # 3. Match old Spanish plate format: 1-2 province letters + 4 digits + 1-2 letters
-    match_antic = re.search(r'[A-Z]{1,2}\d{4}[A-Z]{1,2}', text_net)
-    if match_antic:
-        return match_antic.group(0)
-        
-    # 4. Fallback if 'E' prefix was included in string length > 7
-    if text_net.startswith('E') and len(text_net) > 7:
-        text_sense_e = text_net[1:]
-        match_sense_e = re.search(r'\d{4}[B-DF-HJ-NP-TV-Z]{3}', text_sense_e)
-        if match_sense_e:
-            return match_sense_e.group(0)
-
-    return text_net
-
 # Sidebar Navigation
 st.sidebar.title("🚌 Gestió d'Autobusos")
 st.sidebar.markdown("**Control d'Accessos - Tall per Obres**")
+db_label, db_is_persistent = database_status()
+db_icon = "🟢" if db_is_persistent else "🟡"
+st.sidebar.caption(f"{db_icon} Base de dades: {db_label}")
 page = st.sidebar.radio("Navegació", [
     "📷 Control d'Accessos (Càmera / Manual)",
     "📊 Registre d'Entrades i Sortides",
@@ -90,95 +149,47 @@ page = st.sidebar.radio("Navegació", [
 ])
 
 # -----------------------------------------------------------------------------
-# 1. CONTROL D'ACCESSOS (Càmera HTML5 amb Zoom / Manual)
+# 1. CONTROL D'ACCESSOS (Càmera / Manual amb Filtre REGEX)
 # -----------------------------------------------------------------------------
 if page == "📷 Control d'Accessos (Càmera / Manual)":
     st.header("📷 Control d'Accessos de Vehicles")
-    st.caption("Captura la matrícula mitjançant la càmera amb control de zoom o escriu-la manualment per registrar l'entrada o sortida.")
+    st.caption("Captura la matrícula mitjançant la càmera o escriu-la manualment per registrar l'entrada o sortida.")
 
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("1. Captura amb Càmera i Zoom")
+        st.subheader("1. Captura amb Càmera")
+        camera_photo = st.camera_input("Fes una foto a la matrícula del autobús")
         
-        # Component únic de Càmera HTML5/JS amb Zoom
-        camera_html = """
-        <div style="text-align: center; font-family: sans-serif;">
-            <video id="video" autoplay playsinline style="width: 100%; max-width: 380px; border: 2px solid #ccc; border-radius: 8px;"></video>
-            <br><br>
-            <label for="zoomRange"><b>Nivell de Zoom:</b> </label>
-            <input type="range" id="zoomRange" min="1" max="5" step="0.1" value="2" style="width: 50%;">
-            <span id="zoomValue">2.0x</span>
-        </div>
-
-        <script>
-        const video = document.getElementById('video');
-        const zoomRange = document.getElementById('zoomRange');
-        const zoomValue = document.getElementById('zoomValue');
-        let imageTrack = null;
-
-        navigator.mediaDevices.getUserMedia({
-            video: {
-                facingMode: { ideal: "environment" },
-                zoom: true
-            }
-        }).then(stream => {
-            video.srcObject = stream;
-            imageTrack = stream.getVideoTracks()[0];
-            const capabilities = imageTrack.getCapabilities();
-            if (capabilities.zoom) {
-                zoomRange.min = capabilities.zoom.min;
-                zoomRange.max = capabilities.zoom.max;
-                zoomRange.step = capabilities.zoom.step;
-                zoomRange.value = Math.min(2.0, capabilities.zoom.max);
-                applyZoom(zoomRange.value);
-            } else {
-                zoomRange.disabled = true;
-                zoomValue.innerText = "Zoom no suportat per la lent";
-            }
-        }).catch(err => {
-            navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
-                video.srcObject = stream;
-            });
-        });
-
-        zoomRange.oninput = (e) => { applyZoom(e.target.value); };
-
-        function applyZoom(val) {
-            zoomValue.innerText = parseFloat(val).toFixed(1) + 'x';
-            if (imageTrack && imageTrack.applyConstraints) {
-                imageTrack.applyConstraints({ advanced: [{ zoom: val }] });
-            }
-        }
-        </script>
-        """
-        html_components.html(camera_html, height=280)
-
-        # Captura directa per pujar la foto o utilitzar l'entrada manual
-        uploaded_photo = st.file_uploader("O selecciona una imatge capturada:", type=["jpg", "jpeg", "png"])
-
         matricula_detectada = ""
-        if uploaded_photo is not None:
-            try:
-                image = Image.open(uploaded_photo)
-                image = image.convert("RGB")
-                image_array = prepare_image_for_ocr(image)
+        if camera_photo is not None:
+            with st.spinner("Processant la imatge amb OCR..."):
+                photo_bytes = camera_photo.getvalue()
 
-                with st.spinner("Processant la imatge amb OCR i filtrat de matrícula..."):
-                    results = reader.readtext(image_array, detail=0)
-                    if results:
-                        raw_candidate = "".join(results)
-                        candidate = netejar_i_filtrar_matricula(raw_candidate)
-                        st.success(f"Matrícula detectada i filtrada: **{candidate}**")
+                # Llegim i concatenem tot el text trobat a la imatge.
+                results = reader.readtext(photo_bytes, detail=0)
+
+                if results:
+                    raw_text = "".join(results)
+                    candidate = netejar_i_filtrar_matricula(raw_text)
+
+                    if candidate:
+                        st.success(f"Matrícula detectada: **{candidate}**")
                         matricula_detectada = candidate
                     else:
-                        st.warning("No s'ha detectat cap text clar. Utilitza l'entrada manual a sota.")
-            except Exception as e:
-                st.error(f"No s'ha pogut processar la imatge per OCR: {e}")
-
+                        st.warning(
+                            "No s'ha detectat cap matrícula amb el format "
+                            "de 4 xifres i 3 lletres. Utilitza l'entrada manual."
+                        )
+                else:
+                    st.warning("No s'ha detectat cap text a la foto. Utilitza l'entrada manual.")
 
     with col2:
         st.subheader("2. Confirmació / Entrada Manual")
+        missatge_alta_rapida = st.session_state.pop("missatge_alta_rapida", None)
+        if missatge_alta_rapida:
+            st.success(missatge_alta_rapida)
+
         val_inicial = matricula_detectada if matricula_detectada else ""
         matricula_input = st.text_input("Matrícula del vehicle:", value=val_inicial, placeholder="Ex: 1234BCD").strip().upper()
         
@@ -189,12 +200,12 @@ if page == "📷 Control d'Accessos (Càmera / Manual)":
                 conn = get_db_connection()
                 c = conn.cursor()
                 
+                # Comprovar si l'autocar està catalogat a la flota
                 c.execute("SELECT * FROM autocars WHERE matricula = ?", (matricula_input,))
                 autocar = c.fetchone()
+                autocar_no_catalogat = autocar is None
                 
-                if not autocar:
-                    st.warning(f"⚠️ La matrícula **{matricula_input}** no està donada d'alta a la flota. Pots enregistrar l'accés, però recorda donar-la d'alta a la secció 'Alta i Gestió de Flota'.")
-                
+                # Comprovar si hi ha un moviment obert
                 c.execute("""
                     SELECT id, hora_entrada FROM registres 
                     WHERE matricula = ? AND estat = 'DINS' 
@@ -205,6 +216,7 @@ if page == "📷 Control d'Accessos (Càmera / Manual)":
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 if open_reg:
+                    # Registrar Sortida
                     reg_id = open_reg[0]
                     c.execute("""
                         UPDATE registres 
@@ -214,14 +226,67 @@ if page == "📷 Control d'Accessos (Càmera / Manual)":
                     conn.commit()
                     st.success(f"✅ **SORTIDA REGISTRADA** per a l'autobús **{matricula_input}** a les {now_str}.")
                 else:
+                    # Registrar Entrada
                     c.execute("""
                         INSERT INTO registres (matricula, hora_entrada, estat) 
                         VALUES (?, ?, 'DINS')
                     """, (matricula_input, now_str))
                     conn.commit()
                     st.success(f"🟢 **ENTRADA REGISTRADA** per a l'autobús **{matricula_input}** a les {now_str}.")
-                
+
                 conn.close()
+
+                if autocar_no_catalogat:
+                    st.session_state["matricula_pendent_alta"] = matricula_input
+                    st.warning(
+                        f"La matrícula **{matricula_input}** no forma part de la flota. "
+                        "La pots afegir ara amb el formulari ràpid."
+                    )
+                elif st.session_state.get("matricula_pendent_alta") == matricula_input:
+                    st.session_state["matricula_pendent_alta"] = None
+
+        matricula_pendent = st.session_state.get("matricula_pendent_alta")
+        if matricula_pendent:
+            with st.container(border=True):
+                st.subheader("Afegir l'autocar a la flota")
+                st.caption(
+                    f"Completa les dades de **{matricula_pendent}** o deixa l'alta per a més tard."
+                )
+
+                with st.form(f"alta_rapida_{matricula_pendent}", clear_on_submit=True):
+                    st.number_input(
+                        "Capacitat (places)",
+                        min_value=1,
+                        max_value=120,
+                        value=55,
+                        key=f"capacitat_rapida_{matricula_pendent}",
+                    )
+                    st.selectbox(
+                        "Accés PMR",
+                        ["Sí", "No"],
+                        key=f"pmr_rapid_{matricula_pendent}",
+                    )
+                    st.selectbox(
+                        "Aire condicionat",
+                        ["Sí", "No"],
+                        key=f"ac_rapid_{matricula_pendent}",
+                    )
+                    st.text_input(
+                        "Conductor",
+                        placeholder="Nom i cognoms (opcional)",
+                        key=f"conductor_rapid_{matricula_pendent}",
+                    )
+                    st.form_submit_button(
+                        "Afegir a la flota",
+                        type="primary",
+                        icon=":material/add:",
+                        on_click=completar_alta_rapida,
+                    )
+                    st.form_submit_button(
+                        "Ara no",
+                        icon=":material/schedule:",
+                        on_click=descartar_alta_rapida,
+                    )
 
 # -----------------------------------------------------------------------------
 # 2. REGISTRE D'ENTRADES I SORTIDES
@@ -233,20 +298,20 @@ elif page == "📊 Registre d'Entrades i Sortides":
     conn = get_db_connection()
     query = """
         SELECT 
-            r.id AS 'ID Registre',
-            r.matricula AS 'Matrícula',
-            r.hora_entrada AS 'Arribada',
-            COALESCE(r.hora_sortida, '-') AS 'Sortida',
-            r.estat AS 'Estat actual',
-            COALESCE(a.capacitat, 'No catalogat') AS 'Capacitat',
-            COALESCE(a.acces_pmr, '-') AS 'Accés PMR',
-            COALESCE(a.aire_acondicionat, '-') AS 'Aire Acondicionat',
-            COALESCE(a.conductor, '-') AS 'Conductor'
+            r.id AS "ID Registre",
+            r.matricula AS "Matrícula",
+            r.hora_entrada AS "Arribada",
+            COALESCE(r.hora_sortida, '-') AS "Sortida",
+            r.estat AS "Estat actual",
+            COALESCE(CAST(a.capacitat AS TEXT), 'No catalogat') AS "Capacitat",
+            COALESCE(a.acces_pmr, '-') AS "Accés PMR",
+            COALESCE(a.aire_acondicionat, '-') AS "Aire Acondicionat",
+            COALESCE(a.conductor, '-') AS "Conductor"
         FROM registres r
         LEFT JOIN autocars a ON r.matricula = a.matricula
         ORDER BY r.id DESC
     """
-    df_registres = pd.read_sql_query(query, conn)
+    df_registres = read_dataframe(query, conn)
     conn.close()
 
     if not df_registres.empty:
@@ -257,12 +322,12 @@ elif page == "📊 Registre d'Entrades i Sortides":
         m1.metric("Vehicles actualment a DINS", dins_count)
         m2.metric("Total de moviments enregistrats", total_count)
         
-        st.dataframe(df_registres, use_container_width=True)
+        st.dataframe(df_registres, width="stretch")
     else:
         st.info("Encara no hi ha cap accés registrat.")
 
 # -----------------------------------------------------------------------------
-# 3. ALTA I GESTIÓ DE FLOTA
+# 3. ALTA I GESTIÓ DE FLOTA (AUTOCARS)
 # -----------------------------------------------------------------------------
 elif page == "🚌 Alta i Gestió de Flota (Autocars)":
     st.header("🚌 Alta i Gestió de la Flota d'Autocars")
@@ -285,27 +350,24 @@ elif page == "🚌 Alta i Gestió de Flota (Autocars)":
                 if not mat:
                     st.error("La matrícula és un camp obligatori.")
                 else:
-                    conn = get_db_connection()
-                    c = conn.cursor()
                     try:
-                        c.execute("""
-                            INSERT INTO autocars (matricula, capacitat, acces_pmr, aire_acondicionat, conductor)
-                            VALUES (?, ?, ?, ?, ?)
-                        """, (mat, cap, pmr, ac, conductor))
-                        conn.commit()
+                        afegir_autocar_a_flota(mat, cap, pmr, ac, conductor.strip())
                         st.success(f"Autocar **{mat}** afegit correctament!")
-                    except sqlite3.IntegrityError:
+                    except DATABASE_INTEGRITY_ERRORS:
                         st.error(f"La matrícula **{mat}** ja està registrada a la base de dades.")
-                    finally:
-                        conn.close()
 
     with col_table:
         st.subheader("Flota d'Autocars Catalogats")
         conn = get_db_connection()
-        df_autocars = pd.read_sql_query("SELECT matricula AS 'Matrícula', capacitat AS 'Capacitat', acces_pmr AS 'Accés PMR', aire_acondicionat AS 'Aire Acondicionat', conductor AS 'Conductor' FROM autocars", conn)
+        df_autocars = read_dataframe(
+            'SELECT matricula AS "Matrícula", capacitat AS "Capacitat", '
+            'acces_pmr AS "Accés PMR", aire_acondicionat AS "Aire Acondicionat", '
+            'conductor AS "Conductor" FROM autocars',
+            conn,
+        )
         conn.close()
         
-        st.dataframe(df_autocars, use_container_width=True)
+        st.dataframe(df_autocars, width="stretch")
 
 # -----------------------------------------------------------------------------
 # 4. EDICIÓ I MANTENIMENT DE TAULES
@@ -319,7 +381,7 @@ elif page == "✏️ Edició i Manteniment de Taules":
     with tab1:
         st.subheader("Edició de la Taula d'Autocars")
         conn = get_db_connection()
-        df_autocars_edit = pd.read_sql_query("SELECT * FROM autocars", conn)
+        df_autocars_edit = read_dataframe("SELECT * FROM autocars", conn)
         conn.close()
 
         edited_autocars = st.data_editor(
@@ -333,7 +395,7 @@ elif page == "✏️ Edició i Manteniment de Taules":
                 "aire_acondicionat": st.column_config.SelectboxColumn("Aire Acondicionat", options=["Sí", "No"]),
                 "conductor": st.column_config.TextColumn("Conductor")
             },
-            use_container_width=True
+            width="stretch"
         )
 
         if st.button("💾 Desar Canvis a la Taula d'Autocars"):
@@ -342,11 +404,22 @@ elif page == "✏️ Edició i Manteniment de Taules":
             try:
                 c.execute("DELETE FROM autocars")
                 for _, row in edited_autocars.iterrows():
-                    if row['matricula']:
+                    if pd.notna(row['matricula']) and str(row['matricula']).strip():
+                        capacitat = (
+                            int(row['capacitat'])
+                            if pd.notna(row['capacitat'])
+                            else None
+                        )
                         c.execute("""
                             INSERT INTO autocars (matricula, capacitat, acces_pmr, aire_acondicionat, conductor)
                             VALUES (?, ?, ?, ?, ?)
-                        """, (row['matricula'].upper(), row['capacitat'], row['acces_pmr'], row['aire_acondicionat'], row['conductor']))
+                        """, (
+                            str(row['matricula']).strip().upper(),
+                            capacitat,
+                            row['acces_pmr'] if pd.notna(row['acces_pmr']) else None,
+                            row['aire_acondicionat'] if pd.notna(row['aire_acondicionat']) else None,
+                            row['conductor'] if pd.notna(row['conductor']) else None,
+                        ))
                 conn.commit()
                 st.success("S'han guardat tots els canvis a la taula d'Autocars!")
             except Exception as e:
@@ -357,7 +430,7 @@ elif page == "✏️ Edició i Manteniment de Taules":
     with tab2:
         st.subheader("Edició de la Taula de Registres d'Accés")
         conn = get_db_connection()
-        df_registres_edit = pd.read_sql_query("SELECT * FROM registres", conn)
+        df_registres_edit = read_dataframe("SELECT * FROM registres", conn)
         conn.close()
 
         edited_registres = st.data_editor(
@@ -371,7 +444,7 @@ elif page == "✏️ Edició i Manteniment de Taules":
                 "hora_sortida": st.column_config.TextColumn("Hora Sortida"),
                 "estat": st.column_config.SelectboxColumn("Estat", options=["DINS", "FORA"])
             },
-            use_container_width=True
+            width="stretch"
         )
 
         if st.button("💾 Desar Canvis als Registres"):
@@ -380,11 +453,26 @@ elif page == "✏️ Edició i Manteniment de Taules":
             try:
                 c.execute("DELETE FROM registres")
                 for _, row in edited_registres.iterrows():
-                    if row['matricula']:
-                        c.execute("""
-                            INSERT INTO registres (id, matricula, hora_entrada, hora_sortida, estat)
-                            VALUES (?, ?, ?, ?, ?)
-                        """, (row['id'], row['matricula'].upper(), row['hora_entrada'], row['hora_sortida'], row['estat']))
+                    if pd.notna(row['matricula']) and str(row['matricula']).strip():
+                        values = (
+                            str(row['matricula']).strip().upper(),
+                            row['hora_entrada'] if pd.notna(row['hora_entrada']) else None,
+                            row['hora_sortida'] if pd.notna(row['hora_sortida']) else None,
+                            row['estat'] if pd.notna(row['estat']) else None,
+                        )
+                        if pd.notna(row['id']):
+                            c.execute("""
+                                INSERT INTO registres (
+                                    id, matricula, hora_entrada, hora_sortida, estat
+                                ) VALUES (?, ?, ?, ?, ?)
+                            """, (int(row['id']), *values))
+                        else:
+                            c.execute("""
+                                INSERT INTO registres (
+                                    matricula, hora_entrada, hora_sortida, estat
+                                ) VALUES (?, ?, ?, ?)
+                            """, values)
+                sync_registres_sequence(conn)
                 conn.commit()
                 st.success("S'han guardat els canvis a la taula de registres!")
             except Exception as e:
@@ -402,25 +490,25 @@ elif page == "📥 Exportació de Dades (Excel)":
     conn = get_db_connection()
     query_full = """
         SELECT 
-            r.id AS 'ID Registre',
-            r.matricula AS 'Matrícula',
-            r.hora_entrada AS 'Hora Entrada',
-            COALESCE(r.hora_sortida, '') AS 'Hora Sortida',
-            r.estat AS 'Estat',
-            COALESCE(a.capacitat, '') AS 'Capacitat',
-            COALESCE(a.acces_pmr, '') AS 'Accés PMR',
-            COALESCE(a.aire_acondicionat, '') AS 'Aire Acondicionat',
-            COALESCE(a.conductor, '') AS 'Conductor'
+            r.id AS "ID Registre",
+            r.matricula AS "Matrícula",
+            r.hora_entrada AS "Hora Entrada",
+            COALESCE(r.hora_sortida, '') AS "Hora Sortida",
+            r.estat AS "Estat",
+            COALESCE(CAST(a.capacitat AS TEXT), '') AS "Capacitat",
+            COALESCE(a.acces_pmr, '') AS "Accés PMR",
+            COALESCE(a.aire_acondicionat, '') AS "Aire Acondicionat",
+            COALESCE(a.conductor, '') AS "Conductor"
         FROM registres r
         LEFT JOIN autocars a ON r.matricula = a.matricula
         ORDER BY r.id DESC
     """
-    df_full = pd.read_sql_query(query_full, conn)
-    df_autocars = pd.read_sql_query("SELECT * FROM autocars", conn)
+    df_full = read_dataframe(query_full, conn)
+    df_autocars = read_dataframe("SELECT * FROM autocars", conn)
     conn.close()
 
     st.subheader("Vista prèvia de les dades a exportar")
-    st.dataframe(df_full.head(10), use_container_width=True)
+    st.dataframe(df_full.head(10), width="stretch")
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -436,4 +524,3 @@ elif page == "📥 Exportació de Dades (Excel)":
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary"
     )
-

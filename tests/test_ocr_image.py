@@ -1,7 +1,7 @@
 from PIL import Image
 import io
 
-from ocr_utils import prepare_image_for_ocr
+from borrar.ocr_utils import prepare_image_for_ocr
 
 
 def test_prepare_image_for_ocr_returns_numpy_array():
