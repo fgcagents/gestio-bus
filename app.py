@@ -155,45 +155,64 @@ if page == "📷 Control d'Accessos (Càmera / Manual)":
     st.header("📷 Control d'Accessos de Vehicles")
     st.caption("Captura la matrícula mitjançant la càmera o escriu-la manualment per registrar l'entrada o sortida.")
 
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("1. Captura amb Càmera")
-        camera_photo = st.camera_input("Fes una foto a la matrícula del autobús")
-        
-        matricula_detectada = ""
-        if camera_photo is not None:
-            with st.spinner("Processant la imatge amb OCR..."):
-                photo_bytes = camera_photo.getvalue()
+    # CSS corregit: eliminem el max-width fix i forcem el 100% real de l'amplada
+    # disponible tant al contenidor com al <video> intern.
+    st.markdown("""
+        <style>
+        div[data-testid="stCameraInput"] {
+            width: 100% !important;
+        }
+        div[data-testid="stCameraInput"] video {
+            width: 100% !important;
+            height: auto !important;
+            border-radius: 10px;
+            border: 2px solid #0066cc;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 
-                # Llegim i concatenem tot el text trobat a la imatge.
-                results = reader.readtext(photo_bytes, detail=0)
+    # 1. Captura d'imatge a l'amplada total de la pàgina (fora de columnes)
+    st.subheader("1. Captura amb Càmera")
+    camera_photo = st.camera_input("Fes una foto a la matrícula del autobús")
 
-                if results:
-                    raw_text = "".join(results)
-                    candidate = netejar_i_filtrar_matricula(raw_text)
+    matricula_detectada = ""
+    if camera_photo is not None:
+        with st.spinner("Processant la imatge amb OCR..."):
+            photo_bytes = camera_photo.getvalue()
 
-                    if candidate:
-                        st.success(f"Matrícula detectada: **{candidate}**")
-                        matricula_detectada = candidate
-                    else:
-                        st.warning(
-                            "No s'ha detectat cap matrícula amb el format "
-                            "de 4 xifres i 3 lletres. Utilitza l'entrada manual."
-                        )
+            # Llegim i concatenem tot el text trobat a la imatge.
+            results = reader.readtext(photo_bytes, detail=0)
+
+            if results:
+                raw_text = "".join(results)
+                candidate = netejar_i_filtrar_matricula(raw_text)
+
+                if candidate:
+                    st.success(f"Matrícula detectada: **{candidate}**")
+                    matricula_detectada = candidate
                 else:
-                    st.warning("No s'ha detectat cap text a la foto. Utilitza l'entrada manual.")
+                    st.warning(
+                        "No s'ha detectat cap matrícula amb el format "
+                        "de 4 xifres i 3 lletres. Utilitza l'entrada manual."
+                    )
+            else:
+                st.warning("No s'ha detectat cap text a la foto. Utilitza l'entrada manual.")
 
-    with col2:
-        st.subheader("2. Confirmació / Entrada Manual")
-        missatge_alta_rapida = st.session_state.pop("missatge_alta_rapida", None)
-        if missatge_alta_rapida:
-            st.success(missatge_alta_rapida)
+    st.divider()
 
+    # 2. Confirmació / Entrada Manual, en una fila separada sota la càmera.
+    # Aquí sí té sentit limitar l'amplada, ja que és un input curt i un botó.
+    st.subheader("2. Confirmació / Entrada Manual")
+    missatge_alta_rapida = st.session_state.pop("missatge_alta_rapida", None)
+    if missatge_alta_rapida:
+        st.success(missatge_alta_rapida)
+
+    col_input, col_buit = st.columns([1, 1])
+    with col_input:
         val_inicial = matricula_detectada if matricula_detectada else ""
         matricula_input = st.text_input("Matrícula del vehicle:", value=val_inicial, placeholder="Ex: 1234BCD").strip().upper()
-        
-        if st.button("🔄 Registrar Accés (Entrada/Sortida)", type="primary"):
+
+        if st.button("🔄 Registrar Accés (Entrada/Sortida)", type="primary", use_container_width=True):
             if not matricula_input:
                 st.error("Si us plau, introdueix una matrícula vàlida.")
             else:
