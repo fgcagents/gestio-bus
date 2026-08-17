@@ -142,6 +142,19 @@ def init_db():
                 estat TEXT NOT NULL
             )
         """)
+        
+        # Afegir columnes que falten si estem a PostgreSQL
+        if DATABASE_BACKEND == "postgresql":
+            try:
+                cursor.execute("ALTER TABLE registres ADD COLUMN estacio TEXT")
+            except Exception:
+                pass  # Columna ja existeix
+            
+            try:
+                cursor.execute("ALTER TABLE registres ADD COLUMN sentit TEXT")
+            except Exception:
+                pass  # Columna ja existeix
+        
         conn.commit()
     except Exception:
         conn.rollback()
