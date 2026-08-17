@@ -152,17 +152,16 @@ st.sidebar.caption(f"{db_icon} Base de dades: {db_label}")
 # Injectar CSS per millorar l'espaiat entre opcions del radio button
 st.html("""
 <style>
-@media (max-width: 768px) {
-    [data-testid="stSidebar"] div[role="radiogroup"] {
-        gap: 0.75rem;
-    }
 
-    [data-testid="stSidebar"] div[role="radiogroup"] label {
-        min-height: 52px;
-        padding: 0.65rem 0.75rem;
-        border-radius: 0.5rem;
-        align-items: center;
-    }
+[data-testid="stSidebar"] div[role="radiogroup"] {
+    gap: 0.0rem;
+}
+
+[data-testid="stSidebar"] div[role="radiogroup"] label {
+    min-height: 5px;
+    padding: 0.65rem 0.75rem;
+    border-radius: 0.5rem;
+    align-items: center;
 }
 </style>
 """)
@@ -214,7 +213,7 @@ if page == "📷 Arribada / Sortida":
         # a llançar en cada interacció encara que la foto no hagués canviat.
         if st.session_state.get("ocr_photo_hash") != photo_hash:
             with st.spinner("Processant la imatge amb OCR..."):
-                reader: load_ocr()
+                reader = load_ocr()
                 results = reader.readtext(photo_bytes, detail=0)
 
                 candidate = None
