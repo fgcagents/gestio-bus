@@ -4,6 +4,7 @@ from datetime import datetime
 import easyocr
 import re
 import io
+import hashlib
 
 from database import (
     DATABASE_INTEGRITY_ERRORS,
@@ -193,26 +194,37 @@ if page == "📷 Arribada / Sortida":
 
     matricula_detectada = ""
     if camera_photo is not None:
-        with st.spinner("Processant la imatge amb OCR..."):
-            photo_bytes = camera_photo.getvalue()
+        photo_bytes = camera_photo.getvalue()
+        photo_hash = hashlib.md5(photo_bytes).hexdigest()
 
-            # Llegim i concatenem tot el text trobat a la imatge.
-            results = reader.readtext(photo_bytes, detail=0)
+        # Només executem l'OCR quan la foto és nova. camera_photo es manté
+        # actiu al session_state entre reruns (p.ex. en clicar el radio
+        # button de l'estació), així que sense aquest gate l'OCR es tornava
+        # a llançar en cada interacció encara que la foto no hagués canviat.
+        if st.session_state.get("ocr_photo_hash") != photo_hash:
+            with st.spinner("Processant la imatge amb OCR..."):
+                results = reader.readtext(photo_bytes, detail=0)
 
-            if results:
-                raw_text = "".join(results)
-                candidate = netejar_i_filtrar_matricula(raw_text)
+                candidate = None
+                if results:
+                    raw_text = "".join(results)
+                    candidate = netejar_i_filtrar_matricula(raw_text)
 
-                if candidate:
-                    st.success(f"Matrícula detectada: **{candidate}**")
-                    matricula_detectada = candidate
-                else:
-                    st.warning(
-                        "No s'ha detectat cap matrícula amb el format "
-                        "de 4 xifres i 3 lletres. Utilitza l'entrada manual."
-                    )
-            else:
-                st.warning("No s'ha detectat cap text a la foto. Utilitza l'entrada manual.")
+                st.session_state["ocr_photo_hash"] = photo_hash
+                st.session_state["ocr_candidate"] = candidate
+                st.session_state["ocr_sense_text"] = not bool(results)
+
+        candidate = st.session_state.get("ocr_candidate")
+        if candidate:
+            st.success(f"Matrícula detectada: **{candidate}**")
+            matricula_detectada = candidate
+        elif st.session_state.get("ocr_sense_text"):
+            st.warning("No s'ha detectat cap text a la foto. Utilitza l'entrada manual.")
+        else:
+            st.warning(
+                "No s'ha detectat cap matrícula amb el format "
+                "de 4 xifres i 3 lletres. Utilitza l'entrada manual."
+            )
 
     st.divider()
 
@@ -228,9 +240,14 @@ if page == "📷 Arribada / Sortida":
         val_inicial = matricula_detectada if matricula_detectada else ""
         matricula_input = st.text_input("Matrícula del vehicle:", value=val_inicial, placeholder="Ex: 1234BCD").strip().upper()
     
-    # Si la matrícula s'ha canviat, comprovar si hi ha un registre obert i preseleccionar l'estació
+    # Si la matrícula s'ha canviat, comprovar si hi ha un registre obert i preseleccionar l'estació.
+    # Això només s'ha de fer un cop per matrícula: si es tornés a fer en cada
+    # rerun (p.ex. en clicar el radio button, que provoca un rerun de tot
+    # l'script), sobreescriuria constantment st.session_state["estacio_sortida"]
+    # amb el valor de la BD i desfaria la selecció manual de l'usuari — això
+    # era el "bucle" que feia que el radio semblés no respondre.
     estacio_preseleccionada = "Seleccionar..."
-    if matricula_input:
+    if matricula_input and st.session_state.get("preseleccio_feta_per") != matricula_input:
         conn_check = get_db_connection()
         c_check = conn_check.cursor()
         c_check.execute("""
@@ -244,6 +261,12 @@ if page == "📷 Arribada / Sortida":
             # Precarregar al session_state
             st.session_state.estacio_sortida = estacio_preseleccionada
         conn_check.close()
+        st.session_state["preseleccio_feta_per"] = matricula_input
+    elif matricula_input and st.session_state.get("estacio_sortida") not in (None, "Seleccionar..."):
+        # Ja s'ha fet la preselecció per aquesta matrícula; mantenim el valor
+        # actual (que pot ser la selecció manual de l'usuari) per mostrar
+        # l'avís informatiu de forma consistent.
+        estacio_preseleccionada = st.session_state.get("estacio_sortida")
 
     # Radio buttons permanents per a l'estació (serveixen tant per OCR com per entrada manual)
     st.subheader("Estació de sortida")
