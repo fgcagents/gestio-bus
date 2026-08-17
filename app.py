@@ -119,8 +119,13 @@ def descartar_alta_rapida():
     st.session_state["matricula_pendent_alta"] = None
 
 
-try:
+@st.cache_resource
+def ensure_db_initialized():
     init_db()
+    return True
+
+try:
+    ensure_db_initialized()
 except Exception:
     st.error(
         "No s'ha pogut connectar amb la base de dades. "
@@ -269,7 +274,7 @@ if page == "📷 Arribada / Sortida":
         estacio_preseleccionada = st.session_state.get("estacio_sortida")
 
     # Radio buttons permanents per a l'estació (serveixen tant per OCR com per entrada manual)
-    st.subheader("Estació")
+    st.subheader("Estació de sortida")
     if estacio_preseleccionada != "Seleccionar...":
         st.info(f"📍 Estació detectada de l'entrada: **{estacio_preseleccionada}**")
     
