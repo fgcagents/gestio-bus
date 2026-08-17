@@ -146,12 +146,17 @@ st.sidebar.caption(f"{db_icon} Base de dades: {db_label}")
 # Injectar CSS per millorar l'espaiat entre opcions del radio button
 st.markdown("""
     <style>
-    /* Incrementa l'espai entre opcions del radio a la sidebar */
-    div[data-testid="stSidebar"] div[role="radiogroup"] > label {
-        padding-top: 20px !important;
-        padding-bottom: 20px !important;
-        margin-bottom: 4px !important;
+   div[data-testid="stSidebar"] div[data-testid="stRadioGroup"] {
+        gap: 18px;
     }
+    div[data-testid="stSidebar"] label[data-testid="stRadioOption"] {
+        padding-bottom: 8px;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    div[data-testid="stSidebar"] label[data-testid="stRadioOption"]:last-child {
+        border-bottom: none;
+    }
+    
     </style>
 """, unsafe_allow_html=True)
 
