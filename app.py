@@ -269,7 +269,7 @@ if page == "📷 Arribada / Sortida":
         estacio_preseleccionada = st.session_state.get("estacio_sortida")
 
     # Radio buttons permanents per a l'estació (serveixen tant per OCR com per entrada manual)
-    st.subheader("Estació de sortida")
+    st.subheader("Estació")
     if estacio_preseleccionada != "Seleccionar...":
         st.info(f"📍 Estació detectada de l'entrada: **{estacio_preseleccionada}**")
     
