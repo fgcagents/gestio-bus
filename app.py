@@ -140,7 +140,7 @@ st.session_state.setdefault("missatge_alta_rapida", None)
 def load_ocr():
     return easyocr.Reader(['es', 'en'])
 
-reader = load_ocr()
+# reader = load_ocr()
 
 # Sidebar Navigation
 st.sidebar.title("🚌 Gestió d'Autobusos")
@@ -150,16 +150,22 @@ db_icon = "🟢" if db_is_persistent else "🟡"
 st.sidebar.caption(f"{db_icon} Base de dades: {db_label}")
 
 # Injectar CSS per millorar l'espaiat entre opcions del radio button
-st.markdown("""
-    <style>
-    /* Incrementa l'espai entre opcions del radio a la sidebar */
-    div[data-testid="stSidebar"] div[role="radiogroup"] > label {
-        padding-top: 20px !important;
-        padding-bottom: 20px !important;
-        margin-bottom: 4px !important;
+st.html("""
+<style>
+@media (max-width: 768px) {
+    [data-testid="stSidebar"] div[role="radiogroup"] {
+        gap: 0.75rem;
     }
-    </style>
-""", unsafe_allow_html=True)
+
+    [data-testid="stSidebar"] div[role="radiogroup"] label {
+        min-height: 52px;
+        padding: 0.65rem 0.75rem;
+        border-radius: 0.5rem;
+        align-items: center;
+    }
+}
+</style>
+""")
 
 page = st.sidebar.radio("Navegació", [
     "📷 Arribada / Sortida",
@@ -208,6 +214,7 @@ if page == "📷 Arribada / Sortida":
         # a llançar en cada interacció encara que la foto no hagués canviat.
         if st.session_state.get("ocr_photo_hash") != photo_hash:
             with st.spinner("Processant la imatge amb OCR..."):
+                reader: load_ocr()
                 results = reader.readtext(photo_bytes, detail=0)
 
                 candidate = None
@@ -274,7 +281,7 @@ if page == "📷 Arribada / Sortida":
         estacio_preseleccionada = st.session_state.get("estacio_sortida")
 
     # Radio buttons permanents per a l'estació (serveixen tant per OCR com per entrada manual)
-    st.subheader("Estació de sortida")
+    st.subheader("Estació")
     if estacio_preseleccionada != "Seleccionar...":
         st.info(f"📍 Estació detectada de l'entrada: **{estacio_preseleccionada}**")
     
