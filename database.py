@@ -99,6 +99,15 @@ def get_db_connection():
     return DatabaseConnection(connection, DATABASE_BACKEND)
 
 
+def calcular_sentit(estacio):
+    """Calcula el sentit segons l'estació de sortida."""
+    if estacio == "GR":
+        return "Ascendent"
+    elif estacio == "SR":
+        return "Descendent"
+    return None
+
+
 def init_db():
     """Crea l'esquema necessari sense esborrar dades existents."""
     id_definition = (
@@ -128,6 +137,8 @@ def init_db():
                 matricula TEXT NOT NULL,
                 hora_entrada TEXT NOT NULL,
                 hora_sortida TEXT,
+                estacio TEXT,
+                sentit TEXT,
                 estat TEXT NOT NULL
             )
         """)
@@ -182,7 +193,7 @@ def migrate_sqlite_to_postgres():
             "FROM autocars"
         ).fetchall()
         registres = source.execute(
-            "SELECT id, matricula, hora_entrada, hora_sortida, estat FROM registres"
+            "SELECT id, matricula, hora_entrada, hora_sortida, estacio, sentit, estat FROM registres"
         ).fetchall()
 
     target = get_db_connection()
@@ -207,8 +218,8 @@ def migrate_sqlite_to_postgres():
         for row in registres:
             cursor.execute("""
                 INSERT INTO registres (
-                    id, matricula, hora_entrada, hora_sortida, estat
-                ) VALUES (?, ?, ?, ?, ?)
+                    id, matricula, hora_entrada, hora_sortida, estacio, sentit, estat
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """, row)
 
         sync_registres_sequence(target)
