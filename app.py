@@ -26,6 +26,7 @@ def ensure_db_initialized():
     return True
 
 
+@st.cache_data(ttl=5, show_spinner=False)
 def _vehicles_esperant():
     conn = get_db_connection()
     try:

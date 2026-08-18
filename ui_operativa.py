@@ -8,9 +8,7 @@ import easyocr
 import streamlit as st
 
 from database import (
-    DATABASE_INTEGRITY_ERRORS,
     PATRO_MATRICULA,
-    afegir_autocar,
     calcular_sentit,
     get_db_connection,
     matricula_valida,
@@ -82,7 +80,9 @@ def _registre_obert(matricula):
         conn.close()
 
 
-def _registrar_acces(matricula, estacio_seleccionada):
+def _autocar_catalogat(matricula):
+    if not matricula_valida(matricula):
+        return False
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
@@ -90,8 +90,15 @@ def _registrar_acces(matricula, estacio_seleccionada):
             "SELECT 1 FROM autocars WHERE matricula = ?",
             (matricula,),
         )
-        autocar_catalogat = cursor.fetchone() is not None
+        return cursor.fetchone() is not None
+    finally:
+        conn.close()
 
+
+def _registrar_acces(matricula, estacio_seleccionada, dades_autocar=None):
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
         cursor.execute("""
             SELECT id, hora_entrada, estacio
             FROM registres
@@ -113,6 +120,29 @@ def _registrar_acces(matricula, estacio_seleccionada):
             operacio = "sortida"
             missatge = f"Sortida registrada per a {matricula} a les {ara}."
         else:
+            cursor.execute(
+                "SELECT 1 FROM autocars WHERE matricula = ?",
+                (matricula,),
+            )
+            if cursor.fetchone() is None:
+                if not dades_autocar:
+                    raise ValueError(
+                        "Cal completar la fitxa ràpida de l'autocar."
+                    )
+                cursor.execute("""
+                    INSERT INTO autocars (
+                        matricula, capacitat, acces_pmr,
+                        aire_acondicionat, conductor
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(matricula) DO NOTHING
+                """, (
+                    matricula,
+                    dades_autocar["capacitat"],
+                    dades_autocar["acces_pmr"],
+                    dades_autocar["aire_acondicionat"],
+                    dades_autocar["conductor"],
+                ))
             cursor.execute("""
                 INSERT INTO registres (matricula, hora_entrada, estacio, estat)
                 VALUES (?, ?, ?, 'Esperant')
@@ -121,7 +151,7 @@ def _registrar_acces(matricula, estacio_seleccionada):
             missatge = f"Arribada registrada per a {matricula} a les {ara}."
 
         conn.commit()
-        return operacio, missatge, autocar_catalogat
+        return operacio, missatge
     except Exception:
         conn.rollback()
         raise
@@ -181,43 +211,52 @@ def dialog_captura_ocr():
         st.warning("No s'ha pogut identificar una matrícula vàlida.")
 
 
-@st.dialog("Autocar no catalogat")
-def dialog_alta_rapida(matricula):
-    st.write(f"Vols afegir **{matricula}** a la flota?")
-    with st.form(f"alta_rapida_{matricula}"):
-        capacitat = st.number_input(
-            "Capacitat", min_value=1, max_value=120, value=55
+def _registrar_moviment_formulari():
+    """Registra el moviment abans de renderitzar de nou els camps del formulari."""
+    matricula = st.session_state.get("matricula_operativa", "").strip().upper()
+    estacio = st.session_state.get("estacio_sortida")
+
+    if not matricula_valida(matricula):
+        return
+    if estacio not in {"SR", "GR"}:
+        st.session_state["avis_operativa"] = (
+            "Selecciona l'estació abans de registrar el moviment."
         )
-        pmr = st.selectbox("Accés PMR", ["Sí", "No"])
-        aire = st.selectbox("Aire condicionat", ["Sí", "No"])
-        conductor = st.selectbox("Conductor", ["H", "M"])
-        desar = st.form_submit_button(
-            "Afegir a la flota",
-            type="primary",
-            icon=":material/add:",
-            width="stretch",
+        return
+
+    dades_autocar = None
+    if "alta_rapida_capacitat" in st.session_state:
+        dades_autocar = {
+            "capacitat": st.session_state["alta_rapida_capacitat"],
+            "acces_pmr": st.session_state["alta_rapida_pmr"],
+            "aire_acondicionat": st.session_state["alta_rapida_aire"],
+            "conductor": st.session_state["alta_rapida_conductor"],
+        }
+
+    try:
+        _, missatge = _registrar_acces(matricula, estacio, dades_autocar)
+    except Exception as error:
+        st.session_state["error_operativa"] = (
+            f"No s'ha pogut registrar el moviment: {error}"
         )
+        return
 
-    if desar:
-        try:
-            afegir_autocar(matricula, capacitat, pmr, aire, conductor)
-            st.session_state["missatge_operativa"] = (
-                f"L'autocar {matricula} s'ha afegit a la flota."
-            )
-        except DATABASE_INTEGRITY_ERRORS:
-            st.session_state["missatge_operativa"] = (
-                f"L'autocar {matricula} ja constava a la flota."
-            )
-        except ValueError as error:
-            st.session_state["missatge_operativa"] = str(error)
-        st.session_state["matricula_pendent_alta"] = None
-        st.rerun()
-
-    if st.button("Ara no", icon=":material/schedule:", width="stretch"):
-        st.session_state["matricula_pendent_alta"] = None
-        st.rerun()
+    st.session_state["missatge_operativa"] = missatge
+    st.session_state["matricula_operativa"] = ""
+    st.session_state["matricula_context"] = None
+    st.session_state["estacio_sortida"] = None
+    for clau in (
+        "alta_rapida_capacitat",
+        "alta_rapida_pmr",
+        "alta_rapida_aire",
+        "alta_rapida_conductor",
+    ):
+        st.session_state.pop(clau, None)
+    _reiniciar_captura_ocr()
+    st.cache_data.clear()
 
 
+@st.cache_data(ttl=5, show_spinner=False)
 def _ultims_moviments():
     conn = get_db_connection()
     try:
@@ -236,20 +275,23 @@ def _ultims_moviments():
         conn.close()
 
 
-def render_operativa():
-    st.header("Control d'arribades i sortides")
-    st.caption("Registra un moviment manualment o captura la matrícula amb la càmera.")
-
+@st.fragment
+def _render_panell_operativa():
     st.session_state.setdefault("matricula_operativa", "")
     st.session_state.setdefault("matricula_context", None)
     st.session_state.setdefault("estacio_sortida", None)
     st.session_state.setdefault("versio_camera_ocr", 0)
-    st.session_state.setdefault("matricula_pendent_alta", None)
-
     missatge = st.session_state.pop("missatge_operativa", None)
     if missatge:
         st.toast(missatge, icon=":material/check_circle:")
-        st.success(missatge)
+
+    error = st.session_state.pop("error_operativa", None)
+    if error:
+        st.error(error)
+
+    avis = st.session_state.pop("avis_operativa", None)
+    if avis:
+        st.warning(avis)
 
     with st.container(border=True):
         columna_matricula, columna_camera = st.columns([3, 1])
@@ -271,23 +313,26 @@ def render_operativa():
                 dialog_captura_ocr()
 
         registre_obert = _registre_obert(matricula)
+        requereix_alta = bool(
+            matricula_valida(matricula)
+            and not registre_obert
+            and not _autocar_catalogat(matricula)
+        )
         if st.session_state.get("matricula_context") != matricula:
             st.session_state["matricula_context"] = matricula
             st.session_state["estacio_sortida"] = (
                 registre_obert[2] if registre_obert and registre_obert[2] else None
             )
+            for clau in (
+                "alta_rapida_capacitat",
+                "alta_rapida_pmr",
+                "alta_rapida_aire",
+                "alta_rapida_conductor",
+            ):
+                st.session_state.pop(clau, None)
 
         if matricula and not matricula_valida(matricula):
             st.warning("Format esperat: 4 xifres i 3 consonants, per exemple 1234BCD.")
-
-        estacio_bloquejada = bool(registre_obert and registre_obert[2])
-        estacio = st.segmented_control(
-            "Estació",
-            options=["SR", "GR"],
-            key="estacio_sortida",
-            selection_mode="single",
-            disabled=estacio_bloquejada,
-        )
 
         if registre_obert:
             _, hora_entrada, estacio_arribada = registre_obert
@@ -298,31 +343,60 @@ def render_operativa():
             etiqueta_accio = "Registrar SORTIDA"
             icona_accio = ":material/logout:"
         else:
-            if matricula_valida(matricula):
+            if requereix_alta:
+                st.caption("Matrícula nova: completa la fitxa ràpida per registrar-la.")
+            elif matricula_valida(matricula):
                 st.caption("Nova arribada preparada per registrar.")
             etiqueta_accio = "Registrar ARRIBADA"
             icona_accio = ":material/login:"
 
-        formulari_valid = matricula_valida(matricula) and estacio in {"SR", "GR"}
-        if st.button(
-            etiqueta_accio,
-            type="primary",
-            icon=icona_accio,
-            width="stretch",
-            disabled=not formulari_valid,
-        ):
-            try:
-                _, missatge, catalogat = _registrar_acces(matricula, estacio)
-                st.session_state["missatge_operativa"] = missatge
-                if not catalogat:
-                    st.session_state["matricula_pendent_alta"] = matricula
-                st.session_state["matricula_operativa"] = ""
-                st.session_state["matricula_context"] = None
-                st.session_state["estacio_sortida"] = None
-                _reiniciar_captura_ocr()
-                st.rerun()
-            except Exception as error:
-                st.error(f"No s'ha pogut registrar el moviment: {error}")
+        estacio_bloquejada = bool(registre_obert and registre_obert[2])
+        with st.form("formulari_moviment", border=False):
+            estacio = st.segmented_control(
+                "Estació",
+                options=["SR", "GR"],
+                key="estacio_sortida",
+                selection_mode="single",
+                disabled=estacio_bloquejada,
+            )
+            if requereix_alta:
+                st.markdown("**Fitxa ràpida de l'autocar**")
+                columna_capacitat, columna_pmr = st.columns(2)
+                with columna_capacitat:
+                    st.number_input(
+                        "Capacitat",
+                        min_value=1,
+                        max_value=120,
+                        value=55,
+                        key="alta_rapida_capacitat",
+                    )
+                with columna_pmr:
+                    st.selectbox(
+                        "Accés PMR",
+                        ["Sí", "No"],
+                        key="alta_rapida_pmr",
+                    )
+                columna_aire, columna_conductor = st.columns(2)
+                with columna_aire:
+                    st.selectbox(
+                        "Aire condicionat",
+                        ["Sí", "No"],
+                        key="alta_rapida_aire",
+                    )
+                with columna_conductor:
+                    st.selectbox(
+                        "Conductor",
+                        ["H", "M"],
+                        key="alta_rapida_conductor",
+                    )
+            st.form_submit_button(
+                etiqueta_accio,
+                type="primary",
+                icon=icona_accio,
+                width="stretch",
+                disabled=not matricula_valida(matricula),
+                on_click=_registrar_moviment_formulari,
+            )
 
     st.subheader("Últims moviments")
     ultims = _ultims_moviments()
@@ -331,6 +405,8 @@ def render_operativa():
     else:
         st.dataframe(ultims, width="stretch", hide_index=True)
 
-    pendent = st.session_state.get("matricula_pendent_alta")
-    if pendent:
-        dialog_alta_rapida(pendent)
+
+def render_operativa():
+    st.header("Control d'arribades i sortides")
+    st.caption("Registra un moviment manualment o captura la matrícula amb la càmera.")
+    _render_panell_operativa()
