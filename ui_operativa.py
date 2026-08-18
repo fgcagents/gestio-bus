@@ -58,9 +58,20 @@ def carregar_ocr():
     return easyocr.Reader(["es", "en"])
 
 
-def _normalitzar_matricula_operativa():
-    valor = st.session_state.get("matricula_operativa", "")
+PREFIX_CAMP_MATRICULA = "camp_matricula_operativa_"
+
+
+def _normalitzar_matricula_operativa(clau_camp):
+    valor = st.session_state.get(clau_camp, "")
     st.session_state["matricula_operativa"] = valor.strip().upper()
+
+
+def _renovar_camp_matricula(valor=""):
+    """Prepara un camp nou sense modificar el giny actiu de Streamlit."""
+    st.session_state["matricula_operativa"] = valor.strip().upper()
+    st.session_state["versio_matricula_operativa"] = (
+        st.session_state.get("versio_matricula_operativa", 0) + 1
+    )
 
 
 def _registre_obert(matricula):
@@ -201,7 +212,7 @@ def dialog_captura_ocr():
             icon=":material/check:",
             width="stretch",
         ):
-            st.session_state["matricula_operativa"] = candidat
+            _renovar_camp_matricula(candidat)
             st.session_state["matricula_context"] = None
             _reiniciar_captura_ocr()
             st.rerun()
@@ -242,7 +253,7 @@ def _registrar_moviment_formulari():
         return
 
     st.session_state["missatge_operativa"] = missatge
-    st.session_state["matricula_operativa"] = ""
+    _renovar_camp_matricula()
     st.session_state["matricula_context"] = None
     st.session_state["estacio_sortida"] = None
     for clau in (
@@ -278,6 +289,7 @@ def _ultims_moviments():
 @st.fragment
 def _render_panell_operativa():
     st.session_state.setdefault("matricula_operativa", "")
+    st.session_state.setdefault("versio_matricula_operativa", 0)
     st.session_state.setdefault("matricula_context", None)
     st.session_state.setdefault("estacio_sortida", None)
     st.session_state.setdefault("versio_camera_ocr", 0)
@@ -294,14 +306,28 @@ def _render_panell_operativa():
         st.warning(avis)
 
     with st.container(border=True):
+        clau_camp_matricula = (
+            f"{PREFIX_CAMP_MATRICULA}"
+            f"{st.session_state['versio_matricula_operativa']}"
+        )
+        for clau in tuple(st.session_state):
+            if (
+                isinstance(clau, str)
+                and clau.startswith(PREFIX_CAMP_MATRICULA)
+                and clau != clau_camp_matricula
+            ):
+                st.session_state.pop(clau, None)
+
         columna_matricula, columna_camera = st.columns([3, 1])
         with columna_matricula:
             matricula = st.text_input(
                 "Matrícula",
-                key="matricula_operativa",
+                value=st.session_state["matricula_operativa"],
+                key=clau_camp_matricula,
                 placeholder="1234BCD",
                 max_chars=7,
                 on_change=_normalitzar_matricula_operativa,
+                args=(clau_camp_matricula,),
             ).strip().upper()
         with columna_camera:
             st.write("")

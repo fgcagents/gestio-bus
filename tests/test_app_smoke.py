@@ -86,6 +86,7 @@ def test_sortida_deixa_el_formulari_net(monkeypatch, tmp_path):
     app_file = Path(__file__).resolve().parents[1] / "app.py"
     app = AppTest.from_file(str(app_file)).run(timeout=30)
     app.text_input[0].set_value("1234BCD").run(timeout=30)
+    clau_matricula_abans = app.text_input[0].key
     boto_sortida = next(
         boto for boto in app.button if boto.label == "Registrar SORTIDA"
     )
@@ -97,6 +98,7 @@ def test_sortida_deixa_el_formulari_net(monkeypatch, tmp_path):
     assert not app.success
     assert not app.info
     assert app.text_input[0].value == ""
+    assert app.text_input[0].key != clau_matricula_abans
     assert app.segmented_control[0].value is None
 
     conn = database.get_db_connection()
@@ -122,6 +124,7 @@ def test_matricula_nova_desa_fitxa_rapida_abans_de_lentrada(
     app_file = Path(__file__).resolve().parents[1] / "app.py"
     app = AppTest.from_file(str(app_file)).run(timeout=30)
     app.text_input[0].set_value("9876ZZZ").run(timeout=30)
+    clau_matricula_abans = app.text_input[0].key
     boto_registre = next(
         boto for boto in app.button if boto.label == "Registrar ARRIBADA"
     )
@@ -137,6 +140,7 @@ def test_matricula_nova_desa_fitxa_rapida_abans_de_lentrada(
     assert not app.warning
     assert not app.success
     assert app.text_input[0].value == ""
+    assert app.text_input[0].key != clau_matricula_abans
     assert app.segmented_control[0].value is None
 
     conn = database.get_db_connection()
