@@ -110,6 +110,18 @@ def get_db_connection():
     return DatabaseConnection(connection, DATABASE_BACKEND)
 
 
+@st.cache_data(ttl=5, show_spinner=False)
+def vehicles_esperant():
+    """Retorna el comptador lateral sense repetir la consulta en cada rerun."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM registres WHERE estat = 'Esperant'")
+        return cursor.fetchone()[0]
+    finally:
+        conn.close()
+
+
 def calcular_sentit(estacio):
     """Calcula el sentit segons l'estació de sortida."""
     if estacio == "GR":

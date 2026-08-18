@@ -2,9 +2,12 @@
 
 from datetime import datetime
 import hashlib
+import io
 import re
 
 import easyocr
+import numpy as np
+from PIL import Image, ImageOps
 import streamlit as st
 
 from database import (
@@ -13,6 +16,7 @@ from database import (
     get_db_connection,
     matricula_valida,
     read_dataframe,
+    vehicles_esperant,
 )
 
 
@@ -55,7 +59,60 @@ def netejar_i_filtrar_matricula(text_raw):
 
 @st.cache_resource
 def carregar_ocr():
-    return easyocr.Reader(["es", "en"])
+    # Les matrícules només necessiten el model llatí bàsic. Evitar un segon
+    # idioma redueix el temps d'inicialització i la memòria del procés.
+    return easyocr.Reader(["en"], gpu=False)
+
+
+CARACTERS_MATRICULA = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def preparar_imatge_ocr(photo_bytes):
+    """Orienta, retalla i limita la fotografia abans d'executar EasyOCR."""
+    with Image.open(io.BytesIO(photo_bytes)) as original:
+        imatge = ImageOps.exif_transpose(original).convert("RGB")
+
+    amplada, alcada = imatge.size
+    # La guia de captura demana centrar la matrícula. Eliminem la major part
+    # del vehicle i del fons per reduir molt la feina del detector de text.
+    imatge = imatge.crop((
+        int(amplada * 0.12),
+        int(alcada * 0.28),
+        int(amplada * 0.88),
+        int(alcada * 0.72),
+    ))
+    imatge.thumbnail((1280, 720), Image.Resampling.LANCZOS)
+    return np.asarray(imatge)
+
+
+def seleccionar_candidat_ocr(resultats, mida_imatge):
+    """Tria el candidat més fiable sense barrejar deteccions independents."""
+    if not resultats:
+        return "", 0.0
+
+    amplada, alcada = mida_imatge
+    centre_imatge = (amplada / 2, alcada / 2)
+    candidats = []
+    for caixa, text, confianca in resultats:
+        candidat = netejar_i_filtrar_matricula(text)
+        if not candidat:
+            continue
+
+        centre_x = sum(punt[0] for punt in caixa) / len(caixa)
+        centre_y = sum(punt[1] for punt in caixa) / len(caixa)
+        distancia_relativa = (
+            abs(centre_x - centre_imatge[0]) / max(amplada, 1)
+            + abs(centre_y - centre_imatge[1]) / max(alcada, 1)
+        )
+        # La confiança és el criteri principal; la proximitat al centre
+        # resol empats i evita prioritzar rètols del fons.
+        puntuacio = float(confianca) - 0.15 * distancia_relativa
+        candidats.append((puntuacio, float(confianca), candidat))
+
+    if not candidats:
+        return "", 0.0
+    _, confianca, candidat = max(candidats)
+    return candidat, confianca
 
 
 PREFIX_CAMP_MATRICULA = "camp_matricula_operativa_"
@@ -74,34 +131,40 @@ def _renovar_camp_matricula(valor=""):
     )
 
 
-def _registre_obert(matricula):
+def _context_matricula(matricula):
+    """Llegeix el registre obert i la flota amb una sola connexió a la BD."""
     if not matricula_valida(matricula):
-        return None
+        return None, False
+
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, hora_entrada, estacio
-            FROM registres
-            WHERE matricula = ? AND estat = 'Esperant'
-            ORDER BY id DESC LIMIT 1
+            SELECT
+                r.id,
+                r.hora_entrada,
+                r.estacio,
+                CASE WHEN a.matricula IS NULL THEN 0 ELSE 1 END
+            FROM (SELECT ? AS matricula) AS target
+            LEFT JOIN autocars AS a
+                ON a.matricula = target.matricula
+            LEFT JOIN registres AS r
+                ON r.id = (
+                    SELECT id
+                    FROM registres
+                    WHERE matricula = target.matricula
+                      AND estat = 'Esperant'
+                    ORDER BY id DESC
+                    LIMIT 1
+                )
         """, (matricula,))
-        return cursor.fetchone()
-    finally:
-        conn.close()
-
-
-def _autocar_catalogat(matricula):
-    if not matricula_valida(matricula):
-        return False
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT 1 FROM autocars WHERE matricula = ?",
-            (matricula,),
+        registre_id, hora_entrada, estacio, catalogat = cursor.fetchone()
+        registre = (
+            (registre_id, hora_entrada, estacio)
+            if registre_id is not None
+            else None
         )
-        return cursor.fetchone() is not None
+        return registre, bool(catalogat)
     finally:
         conn.close()
 
@@ -176,6 +239,7 @@ def _reiniciar_captura_ocr():
     )
     st.session_state.pop("ocr_photo_hash", None)
     st.session_state.pop("ocr_candidate", None)
+    st.session_state.pop("ocr_confidence", None)
     st.session_state.pop("ocr_sense_text", None)
 
 
@@ -196,16 +260,34 @@ def dialog_captura_ocr():
     photo_bytes = fotografia.getvalue()
     photo_hash = hashlib.sha256(photo_bytes).hexdigest()
     if st.session_state.get("ocr_photo_hash") != photo_hash:
-        with st.spinner("Llegint la matrícula..."):
-            resultats = carregar_ocr().readtext(photo_bytes, detail=0)
-            candidat = netejar_i_filtrar_matricula("".join(resultats)) if resultats else ""
+        with st.spinner("Preparant el lector i llegint la matrícula..."):
+            imatge_ocr = preparar_imatge_ocr(photo_bytes)
+            resultats = carregar_ocr().readtext(
+                imatge_ocr,
+                detail=1,
+                decoder="greedy",
+                allowlist=CARACTERS_MATRICULA,
+                paragraph=False,
+                batch_size=1,
+                workers=0,
+                canvas_size=1280,
+                mag_ratio=1.0,
+            )
+            candidat, confianca = seleccionar_candidat_ocr(
+                resultats,
+                (imatge_ocr.shape[1], imatge_ocr.shape[0]),
+            )
             st.session_state["ocr_photo_hash"] = photo_hash
             st.session_state["ocr_candidate"] = candidat
+            st.session_state["ocr_confidence"] = confianca
             st.session_state["ocr_sense_text"] = not bool(resultats)
 
     candidat = st.session_state.get("ocr_candidate", "")
     if candidat:
-        st.success(f"Matrícula detectada: **{candidat}**")
+        st.success(
+            f"Matrícula detectada: **{candidat}**",
+            icon=":material/check_circle:",
+        )
         if st.button(
             f"Utilitzar {candidat}",
             type="primary",
@@ -217,9 +299,15 @@ def dialog_captura_ocr():
             _reiniciar_captura_ocr()
             st.rerun()
     elif st.session_state.get("ocr_sense_text"):
-        st.warning("No s'ha detectat text. Torna a fer la fotografia o entra-la manualment.")
+        st.warning(
+            "No s'ha detectat text. Torna a fer la fotografia o entra-la manualment.",
+            icon=":material/warning:",
+        )
     else:
-        st.warning("No s'ha pogut identificar una matrícula vàlida.")
+        st.warning(
+            "No s'ha pogut identificar una matrícula vàlida.",
+            icon=":material/warning:",
+        )
 
 
 def _registrar_moviment_formulari():
@@ -264,7 +352,8 @@ def _registrar_moviment_formulari():
     ):
         st.session_state.pop(clau, None)
     _reiniciar_captura_ocr()
-    st.cache_data.clear()
+    _ultims_moviments.clear()
+    vehicles_esperant.clear()
 
 
 @st.cache_data(ttl=5, show_spinner=False)
@@ -299,11 +388,11 @@ def _render_panell_operativa():
 
     error = st.session_state.pop("error_operativa", None)
     if error:
-        st.error(error)
+        st.error(error, icon=":material/error:")
 
     avis = st.session_state.pop("avis_operativa", None)
     if avis:
-        st.warning(avis)
+        st.warning(avis, icon=":material/warning:")
 
     with st.container(border=True):
         clau_camp_matricula = (
@@ -338,11 +427,11 @@ def _render_panell_operativa():
             ):
                 dialog_captura_ocr()
 
-        registre_obert = _registre_obert(matricula)
+        registre_obert, autocar_catalogat = _context_matricula(matricula)
         requereix_alta = bool(
             matricula_valida(matricula)
             and not registre_obert
-            and not _autocar_catalogat(matricula)
+            and not autocar_catalogat
         )
         if st.session_state.get("matricula_context") != matricula:
             st.session_state["matricula_context"] = matricula
@@ -358,21 +447,33 @@ def _render_panell_operativa():
                 st.session_state.pop(clau, None)
 
         if matricula and not matricula_valida(matricula):
-            st.warning("Format esperat: 4 xifres i 3 consonants, per exemple 1234BCD.")
+            st.warning(
+                "Format esperat: 4 xifres i 3 consonants, per exemple 1234BCD.",
+                icon=":material/warning:",
+            )
 
         if registre_obert:
             _, hora_entrada, estacio_arribada = registre_obert
             st.info(
                 f"**Sortida pendent** · Arribada a {estacio_arribada or '-'} "
-                f"a les {hora_entrada}"
+                f"a les {hora_entrada}",
+                icon=":material/logout:",
             )
             etiqueta_accio = "Registrar SORTIDA"
             icona_accio = ":material/logout:"
         else:
             if requereix_alta:
-                st.caption("Matrícula nova: completa la fitxa ràpida per registrar-la.")
+                st.warning(
+                    "**Autocar no catalogat.** Completa les dades del nou "
+                    "autocar abans de registrar l'arribada.",
+                    icon=":material/directions_bus:",
+                )
             elif matricula_valida(matricula):
-                st.caption("Nova arribada preparada per registrar.")
+                st.info(
+                    "**Nova arribada preparada.** Selecciona l'estació i "
+                    "confirma el moviment.",
+                    icon=":material/login:",
+                )
             etiqueta_accio = "Registrar ARRIBADA"
             icona_accio = ":material/login:"
 
@@ -386,7 +487,7 @@ def _render_panell_operativa():
                 disabled=estacio_bloquejada,
             )
             if requereix_alta:
-                st.markdown("**Fitxa ràpida de l'autocar**")
+                st.markdown("**Dades del nou autocar**")
                 columna_capacitat, columna_pmr = st.columns(2)
                 with columna_capacitat:
                     st.number_input(
@@ -427,12 +528,15 @@ def _render_panell_operativa():
     st.subheader("Últims moviments")
     ultims = _ultims_moviments()
     if ultims.empty:
-        st.info("Encara no hi ha moviments registrats.")
+        st.info(
+            "Encara no hi ha moviments registrats.",
+            icon=":material/info:",
+        )
     else:
         st.dataframe(ultims, width="stretch", hide_index=True)
 
 
 def render_operativa():
-    st.header("Control d'arribades i sortides")
+    st.header(":material/swap_vert: Control d'arribades i sortides")
     st.caption("Registra un moviment manualment o captura la matrícula amb la càmera.")
     _render_panell_operativa()

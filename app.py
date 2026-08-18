@@ -2,7 +2,7 @@
 
 import streamlit as st
 
-from database import database_status, get_db_connection, init_db
+from database import database_status, init_db, vehicles_esperant
 
 
 st.set_page_config(
@@ -11,7 +11,7 @@ st.set_page_config(
     layout="wide",
 )
 
-from ui_operativa import render_operativa  # noqa: E402
+from ui_operativa import _ultims_moviments, render_operativa  # noqa: E402
 from ui_pages import (  # noqa: E402
     render_flota,
     render_indicadors,
@@ -26,15 +26,10 @@ def ensure_db_initialized():
     return True
 
 
-@st.cache_data(ttl=5, show_spinner=False)
-def _vehicles_esperant():
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM registres WHERE estat = 'Esperant'")
-        return cursor.fetchone()[0]
-    finally:
-        conn.close()
+def _refrescar_dades():
+    """Invalida només les consultes visibles abans del rerun del botó."""
+    vehicles_esperant.clear()
+    _ultims_moviments.clear()
 
 
 try:
@@ -56,15 +51,14 @@ with st.sidebar:
         icon=":material/database:",
         color="green" if persistent else "orange",
     )
-    st.metric("Vehicles esperant", _vehicles_esperant())
-    if st.button(
+    st.metric("Vehicles esperant", vehicles_esperant())
+    st.button(
         "Actualitzar dades",
         icon=":material/refresh:",
         width="stretch",
         help="Torna a llegir l'estat actual de la base de dades.",
-    ):
-        st.cache_data.clear()
-        st.rerun()
+        on_click=_refrescar_dades,
+    )
     st.caption("Els canvis només es desen quan confirmes l'operació.")
 
 

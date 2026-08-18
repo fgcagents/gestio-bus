@@ -15,7 +15,9 @@ from database import (
     get_db_connection,
     matricula_valida,
     read_dataframe,
+    vehicles_esperant,
 )
+from ui_operativa import _ultims_moviments
 
 
 CONSULTA_REGISTRES = """
@@ -47,7 +49,7 @@ def _llegir_dataframe(consulta):
 
 @st.fragment
 def render_registres():
-    st.header("Registres")
+    st.header(":material/table_view: Registres")
     st.caption("Consulta l'historial de moviments i descarrega les dades quan ho necessitis.")
 
     historial, exportacio = st.tabs(["Historial", "Exportació"])
@@ -55,7 +57,10 @@ def render_registres():
 
     with historial:
         if df_registres.empty:
-            st.info("Encara no hi ha cap moviment registrat.")
+            st.info(
+                "Encara no hi ha cap moviment registrat.",
+                icon=":material/info:",
+            )
         else:
             esperant = int((df_registres["Estat actual"] == "Esperant").sum())
             columna_esperant, columna_total = st.columns(2)
@@ -92,7 +97,7 @@ def render_registres():
 
 @st.fragment
 def render_indicadors():
-    st.header("Indicadors")
+    st.header(":material/monitoring: Indicadors")
     st.caption("Visió ràpida de l'activitat i l'estat actual dels autocars.")
 
     avui = date.today().isoformat()
@@ -147,7 +152,7 @@ def render_indicadors():
             for estacio, quantitat in sorted(espera_per_estacio.items()):
                 st.metric(estacio or "Sense estació", quantitat)
         else:
-            st.info("No hi ha autocars esperant.")
+            st.info("No hi ha autocars esperant.", icon=":material/info:")
 
     with sentits:
         st.subheader("Circulació per sentit")
@@ -155,7 +160,7 @@ def render_indicadors():
             for sentit, quantitat in sorted(circulant_per_sentit.items()):
                 st.metric(sentit or "Sense sentit", quantitat)
         else:
-            st.info("No hi ha autocars circulant.")
+            st.info("No hi ha autocars circulant.", icon=":material/info:")
 
     st.subheader("Distribució horària")
     if per_franja:
@@ -165,7 +170,7 @@ def render_indicadors():
         )
         st.bar_chart(franges.set_index("Hora"))
     else:
-        st.info("Encara no hi ha dades d'avui.")
+        st.info("Encara no hi ha dades d'avui.", icon=":material/info:")
 
 
 def _formulari_alta_autocar():
@@ -188,13 +193,22 @@ def _formulari_alta_autocar():
     if not submitted:
         return
     if not matricula_valida(matricula):
-        st.error("La matrícula ha de tenir 4 xifres i 3 consonants.")
+        st.error(
+            "La matrícula ha de tenir 4 xifres i 3 consonants.",
+            icon=":material/error:",
+        )
         return
     try:
         afegir_autocar(matricula, capacitat, pmr, aire, conductor)
-        st.success(f"L'autocar {matricula} s'ha afegit a la flota.")
+        st.success(
+            f"L'autocar {matricula} s'ha afegit a la flota.",
+            icon=":material/check_circle:",
+        )
     except DATABASE_INTEGRITY_ERRORS:
-        st.error(f"La matrícula {matricula} ja està registrada.")
+        st.error(
+            f"La matrícula {matricula} ja està registrada.",
+            icon=":material/error:",
+        )
 
 
 def _editor_autocars():
@@ -252,29 +266,35 @@ def _editor_autocars():
     requereix_confirmacio = bool(modificades or eliminades)
 
     if not hi_ha_canvis:
-        st.info("No hi ha canvis per desar.")
+        st.info("No hi ha canvis per desar.", icon=":material/info:")
         return
     if requereix_confirmacio and not confirmat:
         st.warning(
-            "Marca la confirmació abans de desar modificacions o baixes."
+            "Marca la confirmació abans de desar modificacions o baixes.",
+            icon=":material/warning:",
         )
         return
 
     try:
         desar_canvis_autocars(afegides, modificades, eliminades)
         st.session_state["versio_editor_autocars"] += 1
-        st.cache_data.clear()
+        _ultims_moviments.clear()
+        vehicles_esperant.clear()
         st.success(
             f"Canvis desats: {len(afegides)} altes, "
-            f"{len(modificades)} modificacions i {len(eliminades)} baixes."
+            f"{len(modificades)} modificacions i {len(eliminades)} baixes.",
+            icon=":material/check_circle:",
         )
     except Exception as error:
-        st.error(f"No s'han pogut desar els canvis: {error}")
+        st.error(
+            f"No s'han pogut desar els canvis: {error}",
+            icon=":material/error:",
+        )
 
 
 @st.fragment
 def render_flota():
-    st.header("Flota")
+    st.header(":material/directions_bus: Flota")
     st.caption("Consulta, amplia o corregeix el catàleg d'autocars.")
 
     consulta, alta, edicio = st.tabs(["Llistat", "Alta", "Edició"])
@@ -298,7 +318,7 @@ def render_flota():
 
 @st.fragment
 def render_manteniment():
-    st.header("Manteniment")
+    st.header(":material/build: Manteniment")
     st.caption("Corregeix manualment moviments concrets quan sigui necessari.")
 
     original = _llegir_dataframe("SELECT * FROM registres ORDER BY id DESC")
@@ -353,22 +373,28 @@ def render_manteniment():
     hi_ha_canvis = bool(afegides or modificades or eliminades)
     requereix_confirmacio = bool(modificades or eliminades)
     if not hi_ha_canvis:
-        st.info("No hi ha canvis per desar.")
+        st.info("No hi ha canvis per desar.", icon=":material/info:")
         return
     if requereix_confirmacio and not confirmat:
         st.warning(
-            "Marca la confirmació abans de desar modificacions o eliminacions."
+            "Marca la confirmació abans de desar modificacions o eliminacions.",
+            icon=":material/warning:",
         )
         return
 
     try:
         desar_canvis_registres(afegides, modificades, eliminades)
         st.session_state["versio_editor_registres"] += 1
-        st.cache_data.clear()
+        _ultims_moviments.clear()
+        vehicles_esperant.clear()
         st.success(
             f"Canvis desats: {len(afegides)} altes, "
             f"{len(modificades)} modificacions i "
-            f"{len(eliminades)} eliminacions."
+            f"{len(eliminades)} eliminacions.",
+            icon=":material/check_circle:",
         )
     except Exception as error:
-        st.error(f"No s'han pogut desar els registres: {error}")
+        st.error(
+            f"No s'han pogut desar els registres: {error}",
+            icon=":material/error:",
+        )
