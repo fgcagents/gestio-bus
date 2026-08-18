@@ -45,6 +45,7 @@ def _llegir_dataframe(consulta):
         conn.close()
 
 
+@st.fragment
 def render_registres():
     st.header("Registres")
     st.caption("Consulta l'historial de moviments i descarrega les dades quan ho necessitis.")
@@ -85,9 +86,11 @@ def render_registres():
             type="primary",
             icon=":material/download:",
             width="stretch",
+            on_click="ignore",
         )
 
 
+@st.fragment
 def render_indicadors():
     st.header("Indicadors")
     st.caption("Visió ràpida de l'activitat i l'estat actual dels autocars.")
@@ -196,29 +199,48 @@ def _formulari_alta_autocar():
 
 def _editor_autocars():
     st.subheader("Editar la flota")
+    st.caption(
+        "Fes els canvis que necessitis i desa'ls tots alhora. "
+        "La taula no es recarrega mentre l'edites."
+    )
     original = _llegir_dataframe("SELECT * FROM autocars ORDER BY matricula")
     st.session_state.setdefault("versio_editor_autocars", 0)
     versio = st.session_state["versio_editor_autocars"]
-    editat = st.data_editor(
-        original,
-        num_rows="dynamic",
-        key=f"editor_autocars_{versio}",
-        column_config={
-            "matricula": st.column_config.TextColumn("Matrícula", required=True),
-            "capacitat": st.column_config.NumberColumn(
-                "Capacitat", min_value=1, max_value=150
-            ),
-            "acces_pmr": st.column_config.SelectboxColumn(
-                "Accés PMR", options=["Sí", "No"]
-            ),
-            "aire_acondicionat": st.column_config.SelectboxColumn(
-                "Aire condicionat", options=["Sí", "No"]
-            ),
-            "conductor": st.column_config.TextColumn("Conductor"),
-        },
-        width="stretch",
-        hide_index=True,
-    )
+    with st.form(f"formulari_editor_autocars_{versio}"):
+        editat = st.data_editor(
+            original,
+            num_rows="dynamic",
+            key=f"editor_autocars_{versio}",
+            column_config={
+                "matricula": st.column_config.TextColumn(
+                    "Matrícula", required=True
+                ),
+                "capacitat": st.column_config.NumberColumn(
+                    "Capacitat", min_value=1, max_value=150
+                ),
+                "acces_pmr": st.column_config.SelectboxColumn(
+                    "Accés PMR", options=["Sí", "No"]
+                ),
+                "aire_acondicionat": st.column_config.SelectboxColumn(
+                    "Aire condicionat", options=["Sí", "No"]
+                ),
+                "conductor": st.column_config.TextColumn("Conductor"),
+            },
+            width="stretch",
+            hide_index=True,
+        )
+        confirmat = st.checkbox(
+            "Confirmo qualsevol modificació o baixa feta a la taula",
+            key=f"confirmar_autocars_{versio}",
+        )
+        desar = st.form_submit_button(
+            "Desar canvis de la flota",
+            icon=":material/save:",
+            type="primary",
+        )
+
+    if not desar:
+        return
 
     afegides, modificades, eliminades = analitzar_canvis_dataframe(
         original,
@@ -226,51 +248,34 @@ def _editor_autocars():
         "matricula",
         ["capacitat", "acces_pmr", "aire_acondicionat", "conductor"],
     )
-    _controls_desat_autocars(afegides, modificades, eliminades, versio)
-
-
-def _controls_desat_autocars(afegides, modificades, eliminades, versio):
     hi_ha_canvis = bool(afegides or modificades or eliminades)
     requereix_confirmacio = bool(modificades or eliminades)
-    if hi_ha_canvis:
-        st.caption(
-            f"Canvis pendents: {len(afegides)} altes, "
+
+    if not hi_ha_canvis:
+        st.info("No hi ha canvis per desar.")
+        return
+    if requereix_confirmacio and not confirmat:
+        st.warning(
+            "Marca la confirmació abans de desar modificacions o baixes."
+        )
+        return
+
+    try:
+        desar_canvis_autocars(afegides, modificades, eliminades)
+        st.session_state["versio_editor_autocars"] += 1
+        st.cache_data.clear()
+        st.success(
+            f"Canvis desats: {len(afegides)} altes, "
             f"{len(modificades)} modificacions i {len(eliminades)} baixes."
         )
-
-    confirmat = True
-    if requereix_confirmacio:
-        st.warning(
-            "Les modificacions i baixes canviaran la flota desada. "
-            "L'historial de moviments es conservarà."
-        )
-        confirmat = st.checkbox(
-            "Confirmo els canvis de la flota",
-            key=f"confirmar_autocars_{versio}",
-        )
-
-    if st.button(
-        "Desar canvis de la flota",
-        icon=":material/save:",
-        type="primary",
-        disabled=not hi_ha_canvis or not confirmat,
-    ):
-        try:
-            desar_canvis_autocars(afegides, modificades, eliminades)
-            st.session_state["versio_editor_autocars"] += 1
-            st.session_state["missatge_flota"] = "Canvis de la flota desats."
-            st.rerun()
-        except Exception as error:
-            st.error(f"No s'han pogut desar els canvis: {error}")
+    except Exception as error:
+        st.error(f"No s'han pogut desar els canvis: {error}")
 
 
+@st.fragment
 def render_flota():
     st.header("Flota")
     st.caption("Consulta, amplia o corregeix el catàleg d'autocars.")
-
-    missatge = st.session_state.pop("missatge_flota", None)
-    if missatge:
-        st.success(missatge)
 
     consulta, alta, edicio = st.tabs(["Llistat", "Alta", "Edició"])
     with consulta:
@@ -291,37 +296,53 @@ def render_flota():
         _editor_autocars()
 
 
+@st.fragment
 def render_manteniment():
     st.header("Manteniment")
     st.caption("Corregeix manualment moviments concrets quan sigui necessari.")
 
-    missatge = st.session_state.pop("missatge_manteniment", None)
-    if missatge:
-        st.success(missatge)
-
     original = _llegir_dataframe("SELECT * FROM registres ORDER BY id DESC")
     st.session_state.setdefault("versio_editor_registres", 0)
     versio = st.session_state["versio_editor_registres"]
-    editat = st.data_editor(
-        original,
-        num_rows="dynamic",
-        key=f"editor_registres_{versio}",
-        column_config={
-            "id": st.column_config.NumberColumn("ID", disabled=True),
-            "matricula": st.column_config.TextColumn("Matrícula", required=True),
-            "hora_entrada": st.column_config.TextColumn("Hora d'arribada"),
-            "hora_sortida": st.column_config.TextColumn("Hora de sortida"),
-            "estacio": st.column_config.SelectboxColumn(
-                "Estació", options=["SR", "GR"]
-            ),
-            "sentit": st.column_config.TextColumn("Sentit", disabled=True),
-            "estat": st.column_config.SelectboxColumn(
-                "Estat", options=["Esperant", "Circulant"]
-            ),
-        },
-        width="stretch",
-        hide_index=True,
+    st.caption(
+        "Fes els canvis que necessitis i desa'ls tots alhora. "
+        "La taula no es recarrega mentre l'edites."
     )
+    with st.form(f"formulari_editor_registres_{versio}"):
+        editat = st.data_editor(
+            original,
+            num_rows="dynamic",
+            key=f"editor_registres_{versio}",
+            column_config={
+                "id": st.column_config.NumberColumn("ID", disabled=True),
+                "matricula": st.column_config.TextColumn(
+                    "Matrícula", required=True
+                ),
+                "hora_entrada": st.column_config.TextColumn("Hora d'arribada"),
+                "hora_sortida": st.column_config.TextColumn("Hora de sortida"),
+                "estacio": st.column_config.SelectboxColumn(
+                    "Estació", options=["SR", "GR"]
+                ),
+                "sentit": st.column_config.TextColumn("Sentit", disabled=True),
+                "estat": st.column_config.SelectboxColumn(
+                    "Estat", options=["Esperant", "Circulant"]
+                ),
+            },
+            width="stretch",
+            hide_index=True,
+        )
+        confirmat = st.checkbox(
+            "Confirmo qualsevol modificació o eliminació feta a la taula",
+            key=f"confirmar_registres_{versio}",
+        )
+        desar = st.form_submit_button(
+            "Desar canvis dels registres",
+            icon=":material/save:",
+            type="primary",
+        )
+
+    if not desar:
+        return
 
     afegides, modificades, eliminades = analitzar_canvis_dataframe(
         original,
@@ -331,30 +352,23 @@ def render_manteniment():
     )
     hi_ha_canvis = bool(afegides or modificades or eliminades)
     requereix_confirmacio = bool(modificades or eliminades)
-    if hi_ha_canvis:
-        st.caption(
-            f"Canvis pendents: {len(afegides)} altes, "
-            f"{len(modificades)} modificacions i {len(eliminades)} eliminacions."
+    if not hi_ha_canvis:
+        st.info("No hi ha canvis per desar.")
+        return
+    if requereix_confirmacio and not confirmat:
+        st.warning(
+            "Marca la confirmació abans de desar modificacions o eliminacions."
         )
+        return
 
-    confirmat = True
-    if requereix_confirmacio:
-        st.warning("Els registres modificats o eliminats no es podran recuperar aquí.")
-        confirmat = st.checkbox(
-            "Confirmo els canvis dels registres",
-            key=f"confirmar_registres_{versio}",
+    try:
+        desar_canvis_registres(afegides, modificades, eliminades)
+        st.session_state["versio_editor_registres"] += 1
+        st.cache_data.clear()
+        st.success(
+            f"Canvis desats: {len(afegides)} altes, "
+            f"{len(modificades)} modificacions i "
+            f"{len(eliminades)} eliminacions."
         )
-
-    if st.button(
-        "Desar canvis dels registres",
-        icon=":material/save:",
-        type="primary",
-        disabled=not hi_ha_canvis or not confirmat,
-    ):
-        try:
-            desar_canvis_registres(afegides, modificades, eliminades)
-            st.session_state["versio_editor_registres"] += 1
-            st.session_state["missatge_manteniment"] = "Canvis dels registres desats."
-            st.rerun()
-        except Exception as error:
-            st.error(f"No s'han pogut desar els registres: {error}")
+    except Exception as error:
+        st.error(f"No s'han pogut desar els registres: {error}")
