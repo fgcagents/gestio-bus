@@ -32,7 +32,7 @@ sobreescriure dades existents.
 A la configuració de l'app, obre **Advanced settings → Secrets** i enganxa-hi:
 
 ```toml
-DTABASE_URL = A"LA_URL_REAL_DE_POSTGRESQL"
+DATABASE_URL = "LA_URL_REAL_DE_POSTGRESQL"
 ```
 
 Quan la connexió sigui correcta, la barra lateral mostrarà

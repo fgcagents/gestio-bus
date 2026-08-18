@@ -8,3 +8,6 @@ __pycache__/
 gestio_autobusos.db
 gestio_autobusos.db-shm
 gestio_autobusos.db-wal
+
+# Còpies comprimides locals del projecte.
+*.rar

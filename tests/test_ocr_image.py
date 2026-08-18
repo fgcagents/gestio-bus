@@ -1,16 +1,13 @@
-from PIL import Image
-import io
-
-from borrar.ocr_utils import prepare_image_for_ocr
+from ui_operativa import netejar_i_filtrar_matricula
 
 
-def test_prepare_image_for_ocr_returns_numpy_array():
-    buffer = io.BytesIO()
-    Image.new("RGB", (200, 80), "white").save(buffer, format="PNG")
-    buffer.seek(0)
+def test_ocr_extreu_una_matricula_valida():
+    assert netejar_i_filtrar_matricula("Bus 1234 BCD") == "1234BCD"
 
-    image_array = prepare_image_for_ocr(buffer)
 
-    assert image_array.shape[0] > 0
-    assert image_array.shape[1] > 0
-    assert image_array.shape[2] == 3
+def test_ocr_corregeix_confusions_visuals_per_posicio():
+    assert netejar_i_filtrar_matricula("I234 BC8") == "1234BCB"
+
+
+def test_ocr_no_converteix_text_arbitrari_en_matricula():
+    assert netejar_i_filtrar_matricula("AUTOBUS BARCELONA") == ""

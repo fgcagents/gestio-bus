@@ -1,6 +1,7 @@
 """Accés a dades compatible amb PostgreSQL i SQLite local."""
 
 import os
+import re
 import sqlite3
 from pathlib import Path
 
@@ -14,7 +15,17 @@ except ImportError:  # Permet continuar treballant en local abans d'instal·lar-
 
 
 APP_DIR = Path(__file__).resolve().parent
-SQLITE_FILE = APP_DIR / "gestio_autobusos.db"
+SQLITE_FILE = Path(
+    os.environ.get("GESTIO_BUS_SQLITE_FILE", APP_DIR / "gestio_autobusos.db")
+)
+PATRO_MATRICULA = r"\d{4}[B-DF-HJ-NPR-TV-Z]{3}"
+
+
+def matricula_valida(matricula):
+    """Comprova el format de matrícula utilitzat per l'aplicació."""
+    if not isinstance(matricula, str):
+        return False
+    return bool(re.fullmatch(PATRO_MATRICULA, matricula.strip().upper()))
 
 
 def _load_database_url():
@@ -143,17 +154,23 @@ def init_db():
             )
         """)
         
-        # Afegir columnes que falten si estem a PostgreSQL
+        # Completar esquemes antics sense provocar errors de columna duplicada.
+        # A PostgreSQL, capturar un error d'ALTER TABLE sense fer rollback deixa
+        # tota la transacció invalidada; IF NOT EXISTS evita aquesta situació.
         if DATABASE_BACKEND == "postgresql":
-            try:
+            cursor.execute(
+                "ALTER TABLE registres ADD COLUMN IF NOT EXISTS estacio TEXT"
+            )
+            cursor.execute(
+                "ALTER TABLE registres ADD COLUMN IF NOT EXISTS sentit TEXT"
+            )
+        else:
+            cursor.execute("PRAGMA table_info(registres)")
+            columnes = {fila[1] for fila in cursor.fetchall()}
+            if "estacio" not in columnes:
                 cursor.execute("ALTER TABLE registres ADD COLUMN estacio TEXT")
-            except Exception:
-                pass  # Columna ja existeix
-            
-            try:
+            if "sentit" not in columnes:
                 cursor.execute("ALTER TABLE registres ADD COLUMN sentit TEXT")
-            except Exception:
-                pass  # Columna ja existeix
         
         conn.commit()
     except Exception:
@@ -172,6 +189,181 @@ def read_dataframe(query, conn, params=()):
         return pd.DataFrame.from_records(cursor.fetchall(), columns=columns)
     finally:
         cursor.close()
+
+
+def _normalitzar_valor(valor):
+    """Converteix valors de pandas en valors comparables i aptes per a SQL."""
+    if pd.isna(valor):
+        return None
+    if hasattr(valor, "item"):
+        return valor.item()
+    return valor
+
+
+def analitzar_canvis_dataframe(original, editat, clau, camps):
+    """Retorna files afegides, modificades i claus eliminades."""
+    originals = {}
+    for _, fila in original.iterrows():
+        valor_clau = _normalitzar_valor(fila.get(clau))
+        if valor_clau is not None:
+            originals[valor_clau] = {
+                camp: _normalitzar_valor(fila.get(camp)) for camp in camps
+            }
+
+    afegides = []
+    modificades = []
+    claus_editades = set()
+
+    for _, fila in editat.iterrows():
+        valor_clau = _normalitzar_valor(fila.get(clau))
+        valors = {camp: _normalitzar_valor(fila.get(camp)) for camp in camps}
+
+        if valor_clau is None:
+            # Les files buides que crea l'editor no són canvis reals.
+            if any(valor not in (None, "") for valor in valors.values()):
+                afegides.append({clau: None, **valors})
+            continue
+
+        claus_editades.add(valor_clau)
+        fila_editada = {clau: valor_clau, **valors}
+        if valor_clau not in originals:
+            afegides.append(fila_editada)
+        elif valors != originals[valor_clau]:
+            modificades.append(fila_editada)
+
+    eliminades = [valor for valor in originals if valor not in claus_editades]
+    return afegides, modificades, eliminades
+
+
+def desar_canvis_autocars(afegides, modificades, eliminades):
+    """Aplica només els canvis de flota indicats dins d'una transacció."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        for matricula in eliminades:
+            cursor.execute("DELETE FROM autocars WHERE matricula = ?", (matricula,))
+
+        for fila in modificades:
+            matricula = str(fila["matricula"] or "").strip().upper()
+            if not matricula_valida(matricula):
+                raise ValueError(f"La matrícula {matricula or '(buida)'} no és vàlida.")
+            cursor.execute("""
+                UPDATE autocars
+                SET capacitat = ?, acces_pmr = ?, aire_acondicionat = ?, conductor = ?
+                WHERE matricula = ?
+            """, (
+                int(fila["capacitat"]) if fila["capacitat"] is not None else None,
+                fila["acces_pmr"],
+                fila["aire_acondicionat"],
+                fila["conductor"],
+                matricula,
+            ))
+
+        for fila in afegides:
+            matricula = str(fila["matricula"] or "").strip().upper()
+            if not matricula_valida(matricula):
+                raise ValueError(f"La matrícula {matricula or '(buida)'} no és vàlida.")
+            cursor.execute("""
+                INSERT INTO autocars (
+                    matricula, capacitat, acces_pmr, aire_acondicionat, conductor
+                ) VALUES (?, ?, ?, ?, ?)
+            """, (
+                matricula,
+                int(fila["capacitat"]) if fila["capacitat"] is not None else None,
+                fila["acces_pmr"],
+                fila["aire_acondicionat"],
+                fila["conductor"],
+            ))
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def afegir_autocar(matricula, capacitat, acces_pmr, aire_acondicionat, conductor):
+    """Afegeix un únic autocar validat dins d'una transacció."""
+    matricula = str(matricula or "").strip().upper()
+    if not matricula_valida(matricula):
+        raise ValueError("La matrícula ha de tenir 4 xifres i 3 consonants.")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO autocars (
+                matricula, capacitat, acces_pmr, aire_acondicionat, conductor
+            ) VALUES (?, ?, ?, ?, ?)
+        """, (
+            matricula,
+            int(capacitat),
+            acces_pmr,
+            aire_acondicionat,
+            conductor,
+        ))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def desar_canvis_registres(afegides, modificades, eliminades):
+    """Aplica canvis incrementals als registres sense reconstruir la taula."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        for registre_id in eliminades:
+            cursor.execute("DELETE FROM registres WHERE id = ?", (int(registre_id),))
+
+        for fila in modificades:
+            estacio = fila["estacio"]
+            matricula = str(fila["matricula"] or "").strip().upper()
+            if not matricula_valida(matricula):
+                raise ValueError(f"La matrícula {matricula or '(buida)'} no és vàlida.")
+            cursor.execute("""
+                UPDATE registres
+                SET matricula = ?, hora_entrada = ?, hora_sortida = ?,
+                    estacio = ?, sentit = ?, estat = ?
+                WHERE id = ?
+            """, (
+                matricula,
+                fila["hora_entrada"],
+                fila["hora_sortida"],
+                estacio,
+                calcular_sentit(estacio) if estacio else None,
+                fila["estat"],
+                int(fila["id"]),
+            ))
+
+        for fila in afegides:
+            estacio = fila["estacio"]
+            matricula = str(fila["matricula"] or "").strip().upper()
+            if not matricula_valida(matricula):
+                raise ValueError(f"La matrícula {matricula or '(buida)'} no és vàlida.")
+            cursor.execute("""
+                INSERT INTO registres (
+                    matricula, hora_entrada, hora_sortida, estacio, sentit, estat
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                matricula,
+                fila["hora_entrada"],
+                fila["hora_sortida"],
+                estacio,
+                calcular_sentit(estacio) if estacio else None,
+                fila["estat"],
+            ))
+
+        sync_registres_sequence(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def sync_registres_sequence(conn):
